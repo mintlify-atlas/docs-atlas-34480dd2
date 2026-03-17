@@ -1,0 +1,203 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "HashiCorp Vault",
+  "projectDescription": "Vault is a tool for secrets management, encryption as a service, and privileged access management that provides a unified interface for securely storing and accessing sensitive data.",
+  "theme": "aspen",
+  "primaryColor": "#040404",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "concepts"
+            ]
+          },
+          {
+            "group": "Setup & Deployment",
+            "pages": [
+              "setup/installation",
+              "setup/configuration",
+              "setup/starting-vault",
+              "setup/docker"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/seal-unseal",
+              "concepts/tokens",
+              "concepts/policies",
+              "concepts/namespaces",
+              "concepts/leases"
+            ]
+          },
+          {
+            "group": "Auth Methods",
+            "pages": [
+              "auth/overview",
+              "auth/token",
+              "auth/approle",
+              "auth/aws",
+              "auth/github",
+              "auth/ldap",
+              "auth/userpass",
+              "auth/cert",
+              "auth/okta"
+            ]
+          },
+          {
+            "group": "Secrets Engines",
+            "pages": [
+              "secrets/overview",
+              "secrets/kv",
+              "secrets/pki",
+              "secrets/transit",
+              "secrets/aws",
+              "secrets/database",
+              "secrets/ssh",
+              "secrets/totp",
+              "secrets/consul",
+              "secrets/rabbitmq"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/replication",
+              "operations/raft",
+              "operations/operator-init",
+              "operations/seal-unseal",
+              "operations/backup-restore",
+              "operations/monitoring"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/audit-devices",
+              "security/acl",
+              "security/tls",
+              "security/sentinel"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "cli/overview"
+            ]
+          },
+          {
+            "group": "Commands",
+            "pages": [
+              "cli/server",
+              "cli/status",
+              "cli/login",
+              "cli/token",
+              "cli/secrets",
+              "cli/auth",
+              "cli/policy",
+              "cli/kv",
+              "cli/operator",
+              "cli/lease",
+              "cli/plugin",
+              "cli/namespace"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/auth"
+            ]
+          },
+          {
+            "group": "System Backend",
+            "pages": [
+              "api/sys/init",
+              "api/sys/seal",
+              "api/sys/health",
+              "api/sys/auth",
+              "api/sys/mounts",
+              "api/sys/policies",
+              "api/sys/audit",
+              "api/sys/plugins",
+              "api/sys/leases",
+              "api/sys/rotate"
+            ]
+          },
+          {
+            "group": "Go SDK",
+            "pages": [
+              "api/sdk/client",
+              "api/sdk/logical",
+              "api/sdk/kv",
+              "api/sdk/auth"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Secure Secret Storage with encryption at rest",
+    "Dynamic Secrets generation for AWS, databases, and more",
+    "Data Encryption as a service via Transit secrets engine",
+    "Lease-based secret lifecycle with automatic revocation",
+    "Multiple auth methods: AppRole, AWS, GitHub, LDAP, TLS certs",
+    "Fine-grained ACL policies for access control",
+    "Audit logging for all secret access",
+    "Namespaces for multi-tenancy",
+    "High availability with Raft integrated storage",
+    "Plugin system for extensible secrets engines and auth methods"
+  ],
+  "publicApiSurface": [
+    "vault server",
+    "vault status",
+    "vault login",
+    "vault kv get/put/delete/list",
+    "vault secrets enable/disable/list",
+    "vault auth enable/disable/list",
+    "vault policy write/read/list/delete",
+    "vault token create/lookup/renew/revoke",
+    "vault operator init/unseal/seal/rekey",
+    "vault lease renew/revoke",
+    "vault plugin register/deregister/list",
+    "vault namespace create/delete/list",
+    "GET/POST /v1/sys/init",
+    "PUT /v1/sys/unseal",
+    "GET /v1/sys/seal-status",
+    "GET /v1/sys/health",
+    "POST /v1/auth/<method>/login",
+    "GET /v1/<secrets-engine>/<path>",
+    "POST /v1/<secrets-engine>/<path>",
+    "DELETE /v1/<secrets-engine>/<path>",
+    "GET /v1/sys/mounts",
+    "POST /v1/sys/mounts/<path>",
+    "GET /v1/sys/policies/acl",
+    "POST /v1/sys/policies/acl/<name>",
+    "api.NewClient(config)",
+    "client.Logical().Read(path)",
+    "client.Logical().Write(path, data)",
+    "client.Auth().Token().LookupSelf()",
+    "client.KVv2(mount).Get(ctx, path)",
+    "client.KVv2(mount).Put(ctx, path, data)"
+  ]
+}
