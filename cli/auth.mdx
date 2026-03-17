@@ -1,0 +1,242 @@
+---
+title: "vault auth"
+description: "Enable, disable, list, move, tune, and get help for Vault auth methods."
+---
+
+## Overview
+
+The `vault auth` command groups subcommands for interacting with Vault's auth methods.
+
+```
+Usage: vault auth <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `enable` | Enable a new auth method |
+| `disable` | Disable an auth method |
+| `list` | List enabled auth methods |
+| `move` | Move an auth method to a new path |
+| `tune` | Tune an auth method configuration |
+| `help` | Print usage for an auth method |
+
+---
+
+## vault auth enable
+
+Enables a new auth method. An auth method is responsible for authenticating users or machines and assigning them policies.
+
+```
+Usage: vault auth enable [options] TYPE
+```
+
+### Flags
+
+<ParamField path="-path" type="string">
+  Place where the auth method will be accessible. Must be unique across all auth methods. Defaults to the TYPE of the auth method. The auth method will be accessible at `/auth/<path>`.
+</ParamField>
+
+<ParamField path="-description" type="string">
+  Human-friendly description for the purpose of this auth method.
+</ParamField>
+
+<ParamField path="-default-lease-ttl" type="duration">
+  The default lease TTL for this auth method. If unspecified, defaults to the Vault server's globally configured default lease TTL.
+</ParamField>
+
+<ParamField path="-max-lease-ttl" type="duration">
+  The maximum lease TTL for this auth method. If unspecified, defaults to the Vault server's globally configured maximum lease TTL.
+</ParamField>
+
+<ParamField path="-audit-non-hmac-request-keys" type="string">
+  Key that will not be HMAC'd by audit devices in the request data object. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-audit-non-hmac-response-keys" type="string">
+  Key that will not be HMAC'd by audit devices in the response data object. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-listing-visibility" type="string">
+  Determines the visibility of the mount in the UI-specific listing endpoint.
+</ParamField>
+
+<ParamField path="-passthrough-request-headers" type="string">
+  Request header value that will be sent to the plugin. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-allowed-response-headers" type="string">
+  Response header value that plugins will be allowed to set. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-plugin-name" type="string">
+  Name of the auth method plugin. This plugin name must already exist in the Vault server's plugin catalog.
+</ParamField>
+
+<ParamField path="-plugin-version" type="string">
+  Select the semantic version of the plugin to enable.
+</ParamField>
+
+<ParamField path="-options" type="string">
+  Key-value pair provided as `key=value` for the mount options. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-local" type="bool" default="false">
+  Mark the auth method as local-only. Local auth methods are not replicated nor removed by replication.
+</ParamField>
+
+<ParamField path="-seal-wrap" type="bool" default="false">
+  Enable seal wrapping of critical values in the auth method.
+</ParamField>
+
+<ParamField path="-external-entropy-access" type="bool" default="false">
+  Enable auth method to access Vault's external entropy source.
+</ParamField>
+
+<ParamField path="-token-type" type="string">
+  Sets a forced token type for the mount. Tokens created by this auth method will always be of this type.
+</ParamField>
+
+<ParamField path="-version" type="int" default="0">
+  Select the version of the auth method to run. Not supported by all auth methods.
+</ParamField>
+
+<ParamField path="-identity-token-key" type="string" default="default">
+  Select the key used to sign plugin identity tokens.
+</ParamField>
+
+<ParamField path="-override-pinned-version" type="bool">
+  Enterprise only. The specified `-plugin-version` will override the pinned plugin version.
+</ParamField>
+
+### Examples
+
+```bash
+# Enable the userpass auth method
+vault auth enable userpass
+
+# Enable the LDAP auth method at a custom path
+vault auth enable -path=auth-prod ldap
+
+# Enable GitHub auth
+vault auth enable github
+
+# Enable a custom auth plugin
+vault auth enable -path=my-auth my-auth-plugin
+
+# Enable with a default token TTL of 8 hours
+vault auth enable -default-lease-ttl=8h userpass
+```
+
+---
+
+## vault auth disable
+
+Disables an auth method at the given path. All users authenticated by this method are invalidated.
+
+```
+Usage: vault auth disable [options] PATH
+```
+
+<Warning>
+  Disabling an auth method immediately revokes all tokens created by that method. Users will need to re-authenticate.
+</Warning>
+
+### Examples
+
+```bash
+vault auth disable userpass/
+vault auth disable github/
+```
+
+---
+
+## vault auth list
+
+Lists the enabled auth methods on the Vault server.
+
+```
+Usage: vault auth list [options]
+```
+
+### Flags
+
+<ParamField path="-detailed" type="bool" default="false">
+  Print detailed information such as configuration and replication status about each auth method. Only applicable to table-formatted output.
+</ParamField>
+
+### Examples
+
+```bash
+# List all enabled auth methods
+vault auth list
+
+# List with detailed output
+vault auth list -detailed
+
+# JSON output
+vault auth list -format=json
+```
+
+### Output Columns (detailed)
+
+When `-detailed` is used, the table includes: Path, Plugin, Accessor, Default TTL, Max TTL, Token Type, Replication, Seal Wrap, External Entropy Access, Options, Description, UUID, Version, Running Version, Running SHA256, Deprecation Status.
+
+---
+
+## vault auth move
+
+Moves an existing auth method to a new path.
+
+```
+Usage: vault auth move [options] SOURCE DESTINATION
+```
+
+### Examples
+
+```bash
+vault auth move userpass/ userpass-v2/
+```
+
+---
+
+## vault auth tune
+
+Tunes the configuration options for the auth method at the given path.
+
+```
+Usage: vault auth tune [options] PATH
+```
+
+This command accepts the same flags as `vault auth enable` (except `-path`, `-local`, `-seal-wrap`, and `-external-entropy-access`).
+
+### Examples
+
+```bash
+# Update the default lease TTL for the userpass auth method
+vault auth tune -default-lease-ttl=8h userpass/
+
+# Update the description
+vault auth tune -description="Production GitHub auth" github/
+
+# Set a forced token type
+vault auth tune -token-type=batch userpass/
+```
+
+---
+
+## vault auth help
+
+Prints usage information for a specific auth method.
+
+```
+Usage: vault auth help TYPE
+```
+
+### Examples
+
+```bash
+vault auth help userpass
+vault auth help ldap
+vault auth help github
+vault auth help oidc
+```

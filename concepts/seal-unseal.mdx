@@ -1,0 +1,210 @@
+---
+title: "Seal and unseal"
+description: "How Vault protects the root key using Shamir's Secret Sharing, and how auto-unseal delegates key storage to a cloud KMS."
+---
+
+When Vault starts, it is **sealed**: it holds an encrypted storage backend but has no knowledge of how to decrypt it. The security barrier cannot be opened until sufficient key material is provided to reconstruct the root key. This is a deliberate safety property — even if an attacker gains access to the raw storage, they cannot read any secrets without the root key.
+
+## Why Vault starts sealed
+
+The `AESGCMBarrier` tracks its sealed state with a field on the struct:
+
+```go
+// From vault/barrier_aes_gcm.go
+type AESGCMBarrier struct {
+    backend physical.Backend
+    l       locking.RWMutex
+    sealed  bool
+    keyring *Keyring
+    // ...
+}
+```
+
+When `sealed` is `true`, every read and write call to the barrier returns an error. The only operations available on a sealed Vault are those that read plaintext storage — specifically, reading the seal configuration so the operator knows how many key shares to provide.
+
+The seal configuration is stored in plaintext at `core/seal-config` so it can be read before the barrier is open:
+
+```go
+// From vault/seal.go
+barrierSealConfigPath = "core/seal-config"
+```
+
+## SealConfig fields
+
+The `SealConfig` struct describes the Shamir parameters chosen at initialization:
+
+```go
+// From vault/seal_config.go
+type SealConfig struct {
+    Type            string   `json:"type"`
+    SecretShares    int      `json:"secret_shares"`     // N — total key shares
+    SecretThreshold int      `json:"secret_threshold"`  // T — shares needed
+    PGPKeys         []string `json:"pgp_keys"`
+    StoredShares    int      `json:"stored_shares"`
+    Name            string   `json:"name"`
+    // ...
+}
+```
+
+Validation enforces:
+- `SecretShares` must be between 1 and 255
+- `SecretThreshold` must be between 1 and 255
+- `SecretThreshold` cannot exceed `SecretShares`
+- For multiple shares, threshold must be greater than one
+
+The **default initialization values** are **5 key shares** with a **threshold of 3**. These are the values presented by `vault operator init` when no flags are specified.
+
+## Shamir's Secret Sharing
+
+Vault implements Shamir's algorithm in `shamir/shamir.go`. The algorithm splits an arbitrary secret into N shares such that any T shares can reconstruct it, but T−1 shares reveal nothing.
+
+```go
+// From shamir/shamir.go
+// makePolynomial constructs a random polynomial of the given
+// degree but with the provided intercept value.
+func makePolynomial(intercept, degree uint8) (polynomial, error) {
+    p := polynomial{
+        coefficients: make([]byte, degree+1),
+    }
+    p.coefficients[0] = intercept
+    if _, err := rand.Read(p.coefficients[1:]); err != nil {
+        return p, err
+    }
+    return p, nil
+}
+```
+
+To reconstruct the secret, Lagrange interpolation is used over the provided sample points:
+
+```go
+// From shamir/shamir.go
+func interpolatePolynomial(x_samples, y_samples []uint8, x uint8) uint8 {
+    limit := len(x_samples)
+    var result, basis uint8
+    for i := 0; i < limit; i++ {
+        // ...
+    }
+    return result
+}
+```
+
+Each share carries 1 byte of overhead (`ShareOverhead = 1`) for the share index tag.
+
+### How the root key is split
+
+1. During `vault operator init`, Vault generates a random root key.
+2. The root key is split into N shares using `shamir.Split`.
+3. The shares are returned to the operator (optionally PGP-encrypted).
+4. Vault discards all in-memory knowledge of the plaintext root key and the shares.
+
+## The unseal process
+
+<Steps>
+  <Step title="Start Vault">
+    Vault starts, reads `core/seal-config`, and reports how many shares are required (e.g., "Unseal Progress 0/3").
+  </Step>
+  <Step title="Provide key shares">
+    Operators submit unseal key shares one at a time via `vault operator unseal` or the `PUT /v1/sys/unseal` API. Each submission is stored in memory in `unlockInfo.Parts`.
+
+    ```go
+    // From vault/core.go
+    type unlockInformation struct {
+        Parts [][]byte
+        Nonce string
+    }
+    ```
+  </Step>
+  <Step title="Threshold reached">
+    Once the number of unique valid shares equals `SecretThreshold`, Vault calls `shamir.Combine` to reconstruct the root key.
+  </Step>
+  <Step title="Barrier opened">
+    The root key is used to decrypt the keyring stored in the barrier. The `AESGCMBarrier.sealed` flag is set to `false`. Vault loads the mount table, auth table, and audit configuration.
+  </Step>
+  <Step title="Post-unseal initialization">
+    The Expiration Manager restores leases, the Policy Store loads policies from the barrier, and Vault begins serving requests.
+  </Step>
+</Steps>
+
+<Warning>
+  Each unseal key share should be distributed to a different trusted operator. Storing all shares together defeats the purpose of the threshold mechanism.
+</Warning>
+
+## Auto-unseal
+
+Auto-unseal replaces the manual share-collection process with a cloud KMS. Instead of Shamir shares, Vault wraps its root key with the KMS and stores the ciphertext. On startup, Vault calls the KMS to unwrap the key automatically.
+
+Supported seal types (from `vault/seal_config.go`):
+
+| `SealConfigType` constant | KMS provider |
+|---|---|
+| `SealConfigTypeAwsKms` | AWS KMS |
+| `SealConfigTypeGcpCkms` | Google Cloud KMS |
+| `SealConfigTypeTransit` | Vault Transit (seal wrapping) |
+| `SealConfigTypePkcs11` | HSM via PKCS#11 |
+| `SealConfigTypeMultiseal` | Multiple KMS providers (enterprise) |
+
+With auto-unseal enabled, `StoredKeysSupported()` returns `seal.StoredKeysSupportedShamirRoot` for the default seal, but auto-seal implementations return `seal.StoredKeysSupportedGeneric`, which means the wrapped key is persisted at `core/hsm/barrier-unseal-keys`:
+
+```go
+// From vault/seal.go
+StoredBarrierKeysPath = "core/hsm/barrier-unseal-keys"
+```
+
+Auto-unseal configuration example (AWS KMS):
+
+```hcl
+seal "awskms" {
+  region     = "us-east-1"
+  kms_key_id = "alias/vault-unseal-key"
+}
+```
+
+<Note>
+  Auto-unseal still issues a recovery key split with Shamir. This recovery key is used to re-generate root tokens and to perform seal migration. The recovery key configuration is stored at `core/recovery-config`.
+</Note>
+
+## Seal migration
+
+Seal migration allows you to move between seal types (e.g., Shamir → AWS KMS, or AWS KMS → GCP CKMS) without re-initializing Vault. During migration, the `migrationInformation` struct tracks the old seal:
+
+```go
+// From vault/core.go
+type migrationInformation struct {
+    seal      Seal   // the seal being migrated FROM
+    unsealKey []byte // the unseal key provided for migration
+}
+```
+
+<Steps>
+  <Step title="Configure new seal">
+    Add the new `seal` stanza to `vault.hcl` alongside the existing one. Set `disabled = "true"` on the old seal.
+  </Step>
+  <Step title="Restart with migration flag">
+    Restart Vault with `-migrate` or wait for the node to detect the seal config change.
+  </Step>
+  <Step title="Provide unseal or recovery key">
+    Supply the Shamir unseal key (or recovery key if migrating from auto-unseal) to authenticate the migration.
+  </Step>
+  <Step title="Migration completes">
+    Vault re-wraps the root key with the new seal, updates the seal generation info at `core/seal-gen-info`, and begins operating with the new seal.
+  </Step>
+</Steps>
+
+## Root token generation during init
+
+When `vault operator init` completes, Vault returns both the unseal key shares and an **initial root token**. This token has no expiry and the `root` policy. It should be used to bootstrap initial configuration and then revoked:
+
+```bash
+# Initialize with default 5 shares, threshold 3
+vault operator init
+
+# Revoke the root token after bootstrapping
+vault token revoke "<root-token>"
+
+# If a root token is ever needed again, generate one using key shares
+vault operator generate-root
+```
+
+<Warning>
+  The initial root token is equivalent to having physical access to the storage backend plus all key shares simultaneously. Treat it as an emergency credential.
+</Warning>

@@ -1,0 +1,240 @@
+---
+title: "Audit Devices"
+description: "Configure audit devices to log every request and response in Vault for security monitoring and compliance."
+---
+
+Audit devices are a core component of Vault's security model. Every request to Vault and every response — including errors — is written to all enabled audit devices before the response is returned to the client.
+
+<Warning>
+  If all enabled audit devices fail to write a log entry, Vault **blocks the request** and returns an error. This ensures audit logging is never silently skipped. At least one audit device must be functioning at all times.
+</Warning>
+
+## What audit devices log
+
+Every audit log entry captures:
+
+- **Request**: client token (HMAC'd), operation type, path, request data, source IP, headers.
+- **Response**: data returned, auth metadata, warnings, errors.
+- **Auth**: token policies, entity ID, accessor (HMAC'd), display name.
+- **Timestamp**: RFC3339 timestamp of the request.
+- **Type**: `request` or `response`.
+
+Sensitive values — including client tokens and token accessors — are **HMAC-SHA256 hashed** using a salt stored in Vault's backend. This prevents audit logs from being used to impersonate clients while still allowing correlation across log entries.
+
+### Audit log entry structure
+
+Based on the `audit.entry` type definition in source:
+
+```json
+{
+  "time": "2024-01-15T10:30:00.000Z",
+  "type": "response",
+  "auth": {
+    "client_token": "hmac-sha256:abc123...",
+    "accessor": "hmac-sha256:def456...",
+    "display_name": "approle",
+    "policies": ["default", "my-app-policy"],
+    "token_policies": ["default", "my-app-policy"],
+    "token_type": "service",
+    "token_ttl": 3600,
+    "entity_id": "d4d70ad6-0a72-4a0c-8c3d-...",
+    "policy_results": {
+      "allowed": true,
+      "granting_policies": [
+        {"name": "my-app-policy", "namespace_id": "root", "type": "acl"}
+      ]
+    }
+  },
+  "request": {
+    "id": "c3aa0e18-...",
+    "operation": "read",
+    "mount_type": "kv",
+    "mount_point": "secret/",
+    "path": "secret/data/my-app/config",
+    "remote_address": "10.0.0.5",
+    "remote_port": 52341
+  },
+  "response": {
+    "data": {
+      "key": "hmac-sha256:..."
+    }
+  }
+}
+```
+
+## Audit device types
+
+Vault supports three built-in audit device types, defined in the `audit` package as `TypeFile`, `TypeSocket`, and `TypeSyslog`.
+
+<CardGroup cols={3}>
+  <Card title="File" icon="file-lines">
+    Writes audit entries to a file on disk. The most common choice for production. Supports `stdout` and `discard` as special path values.
+  </Card>
+  <Card title="Syslog" icon="server">
+    Sends audit entries to the local syslog daemon. Useful for integration with centralized log aggregation systems.
+  </Card>
+  <Card title="Socket" icon="plug">
+    Sends audit entries over a TCP, UDP, or Unix domain socket. Useful for streaming to external log processors.
+  </Card>
+</CardGroup>
+
+## Enabling audit devices
+
+### File audit device
+
+```bash
+# Write to a file
+vault audit enable file file_path=/var/log/vault_audit.log
+
+# Write to stdout (useful in containerized environments)
+vault audit enable file file_path=stdout
+
+# Specify a custom mount path
+vault audit enable -path=file-prod file file_path=/var/log/vault_audit.log
+
+# Add a human-readable description
+vault audit enable \
+  -description="Production audit log" \
+  file file_path=/var/log/vault_audit.log
+```
+
+### Syslog audit device
+
+```bash
+vault audit enable syslog
+
+# With custom facility and tag
+vault audit enable syslog tag="vault" facility="AUTH"
+```
+
+### Socket audit device
+
+```bash
+# TCP socket
+vault audit enable socket address="logstash.example.com:5140" socket_type="tcp"
+
+# UDP socket
+vault audit enable socket address="localhost:9000" socket_type="udp"
+```
+
+## Listing audit devices
+
+```bash
+# Simple listing
+vault audit list
+
+# Detailed listing including options and replication status
+vault audit list -detailed
+```
+
+Example output:
+
+```
+Path     Type    Description
+----     ----    -----------
+file/    file    Production audit log
+syslog/  syslog  n/a
+```
+
+## Disabling audit devices
+
+```bash
+vault audit disable file/
+```
+
+<Warning>
+  If you disable the only audit device, subsequent requests will succeed without audit logging. Vault requires at least one functioning audit device when any are configured. Consider enabling a second device before disabling the primary.
+</Warning>
+
+## Configuration options
+
+### Common options
+
+| Option | Description |
+|--------|-------------|
+| `format` | Log format: `json` (default) or `jsonx` |
+| `hmac_accessor` | Whether to HMAC token accessor values. Default: `true` |
+| `log_raw` | Log sensitive data in plaintext instead of HMAC'd. **Security risk.** Default: `false` |
+| `elide_list_responses` | Omit response data from `LIST` operations. Default: `false` |
+| `prefix` | Prefix to add to each log line |
+
+### File-specific options
+
+| Option | Description |
+|--------|-------------|
+| `file_path` | Path to the audit log file. Use `stdout` or `discard` for special behavior. |
+| `mode` | File permissions (octal). Default: `0600` |
+
+### Socket-specific options
+
+| Option | Description |
+|--------|-------------|
+| `address` | Socket address in `host:port` format |
+| `socket_type` | `tcp`, `udp`, or `unix` |
+
+### Enterprise-only options
+
+<Note>
+  The `filter`, `exclude`, and `fallback` options are available only in Vault Enterprise.
+</Note>
+
+| Option | Description |
+|--------|-------------|
+| `filter` | Filter expression to include only matching events |
+| `exclude` | Filter expression to exclude matching events |
+| `fallback` | Mark this device as a fallback for events excluded by filtered pipelines |
+
+## Local audit devices
+
+In replicated clusters, audit devices are replicated to all secondaries by default. Mark a device as local to prevent replication:
+
+```bash
+vault audit enable -local file file_path=/var/log/vault_local_audit.log
+```
+
+## Log rotation
+
+Vault's file audit device holds the file open for performance. When you rotate logs using `logrotate` or similar tools, send a `SIGHUP` signal to the Vault process to reopen the file handle:
+
+```bash
+# logrotate config example
+/var/log/vault_audit.log {
+  daily
+  rotate 30
+  compress
+  notifempty
+  postrotate
+    kill -HUP $(cat /var/run/vault.pid)
+  endscript
+}
+```
+
+Alternatively, use `systemctl reload vault` if your service file sends SIGHUP on reload.
+
+## Parsing and analyzing audit logs
+
+Audit logs are newline-delimited JSON. Use `jq` for analysis:
+
+```bash
+# Count requests by operation type
+jq -r '.type' /var/log/vault_audit.log | sort | uniq -c | sort -rn
+
+# Find all requests to a specific path
+jq 'select(.request.path | startswith("secret/data/prod"))' /var/log/vault_audit.log
+
+# Find denied requests
+jq 'select(.response.auth.policy_results.allowed == false)' /var/log/vault_audit.log
+
+# Find all authentication events
+jq 'select(.request.path | startswith("auth/"))' /var/log/vault_audit.log
+
+# Find requests from a specific IP
+jq 'select(.request.remote_address == "10.0.1.50")' /var/log/vault_audit.log
+
+# Show error responses
+jq 'select(.error != "")' /var/log/vault_audit.log
+```
+
+<Tip>
+  Forward Vault audit logs to a SIEM (Splunk, Elastic, Datadog) for alerting on anomalous access patterns, policy violations, and potential security incidents.
+</Tip>

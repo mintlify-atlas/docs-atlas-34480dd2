@@ -1,0 +1,334 @@
+---
+title: "Go SDK: KV v2 Client"
+description: "Read, write, patch, delete, and manage metadata for KV v2 secrets using the KVv2 client."
+---
+
+The `KVv2` client provides a high-level interface for the KV v2 secrets engine. Obtain it via `client.KVv2(mountPath)`.
+
+```go
+kv := client.KVv2("secret") // "secret" is the mount path
+```
+
+<Note>
+  The KV v2 secrets engine is the default secrets engine in Vault dev mode (`vault server -dev`), mounted at `secret/`.
+</Note>
+
+## Get (Latest Version)
+
+### `Get(ctx context.Context, secretPath string) (*KVSecret, error)`
+
+Returns the latest version of a secret. If the latest version has been deleted, `Data` will be `nil` but `VersionMetadata` will contain deletion information.
+
+```go
+secret, err := kv.Get(context.Background(), "my-app/database")
+if err != nil {
+    log.Fatal(err)
+}
+if secret.Data == nil {
+    fmt.Println("Secret exists but latest version has been deleted")
+} else {
+    fmt.Println("Password:", secret.Data["password"])
+}
+```
+
+---
+
+## Get Specific Version
+
+### `GetVersion(ctx context.Context, secretPath string, version int) (*KVSecret, error)`
+
+Returns a specific version of the secret.
+
+```go
+secret, err := kv.GetVersion(context.Background(), "my-app/database", 3)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Version 3 password:", secret.Data["password"])
+fmt.Println("Created at:", secret.VersionMetadata.CreatedTime)
+```
+
+---
+
+## Get Versions as List
+
+### `GetVersionsAsList(ctx context.Context, secretPath string) ([]KVVersionMetadata, error)`
+
+Returns metadata for all versions of a secret, sorted by version number.
+
+```go
+versions, err := kv.GetVersionsAsList(context.Background(), "my-app/database")
+if err != nil {
+    log.Fatal(err)
+}
+for _, v := range versions {
+    fmt.Printf("v%d created=%v deleted=%v destroyed=%v\n",
+        v.Version, v.CreatedTime, !v.DeletionTime.IsZero(), v.Destroyed)
+}
+```
+
+---
+
+## Put (Write)
+
+### `Put(ctx context.Context, secretPath string, data map[string]interface{}, opts ...KVOption) (*KVSecret, error)`
+
+Writes a secret. If the secret already exists, a new version is created.
+
+```go
+// Basic write
+secret, err := kv.Put(context.Background(), "my-app/database", map[string]interface{}{
+    "username": "db-admin",
+    "password": "s3cr3t!",
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Written as version:", secret.VersionMetadata.Version)
+
+// Write with check-and-set: only write if current version is 2
+secret, err = kv.Put(context.Background(), "my-app/database", map[string]interface{}{
+    "password": "new-password",
+}, vault.WithCheckAndSet(2))
+```
+
+### KV Options
+
+- `WithCheckAndSet(cas int)` — Only write if the current version matches `cas`. Use `0` to only write if the key doesn't exist.
+- `WithMergeMethod(method string)` — For `Patch` operations: `"patch"` (HTTP PATCH) or `"rw"` (read-then-write).
+
+---
+
+## Patch (Partial Update)
+
+### `Patch(ctx context.Context, secretPath string, newData map[string]interface{}, opts ...KVOption) (*KVSecret, error)`
+
+Additively updates the most recent version. Only the provided key-value pairs are changed; existing keys not in `newData` are preserved.
+
+```go
+// Only update the password, preserving username and other fields
+secret, err := kv.Patch(context.Background(), "my-app/database", map[string]interface{}{
+    "password": "updated-password",
+})
+if err != nil {
+    log.Fatal(err)
+}
+
+// Force read-then-write method (for pre-1.9 servers)
+secret, err = kv.Patch(context.Background(), "my-app/database", map[string]interface{}{
+    "password": "updated-password",
+}, vault.WithMergeMethod("rw"))
+```
+
+---
+
+## Delete (Latest Version)
+
+### `Delete(ctx context.Context, secretPath string) error`
+
+Soft-deletes the most recent version. The data is not permanently removed; it can be undeleted.
+
+```go
+err := kv.Delete(context.Background(), "my-app/database")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+## Delete Specific Versions
+
+### `DeleteVersions(ctx context.Context, secretPath string, versions []int) error`
+
+Soft-deletes specific versions of a secret.
+
+```go
+err := kv.DeleteVersions(context.Background(), "my-app/database", []int{1, 2, 3})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+## Destroy Versions
+
+### `Destroy(ctx context.Context, secretPath string, versions []int) error`
+
+Permanently removes the data for the specified versions. Cannot be undone.
+
+```go
+err := kv.Destroy(context.Background(), "my-app/database", []int{1, 2})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+## Rollback
+
+### `Rollback(ctx context.Context, secretPath string, toVersion int) (*KVSecret, error)`
+
+Rolls a secret back to a previous non-deleted, non-destroyed version. That version's data becomes the newest version.
+
+```go
+secret, err := kv.Rollback(context.Background(), "my-app/database", 2)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Rolled back to version 2, now version:", secret.VersionMetadata.Version)
+```
+
+---
+
+## Get Metadata
+
+### `GetMetadata(ctx context.Context, secretPath string) (*KVMetadata, error)`
+
+Returns the full metadata for a secret, including all versions.
+
+```go
+md, err := kv.GetMetadata(context.Background(), "my-app/database")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Current version:", md.CurrentVersion)
+fmt.Println("Max versions:", md.MaxVersions)
+fmt.Println("CAS required:", md.CASRequired)
+for versionKey, vm := range md.Versions {
+    fmt.Printf("  Version %s: created=%v\n", versionKey, vm.CreatedTime)
+}
+```
+
+---
+
+## Put Metadata
+
+### `PutMetadata(ctx context.Context, secretPath string, metadata KVMetadataPutInput) error`
+
+Fully replaces the metadata for a secret. All fields will be set to the provided values; omitted fields are reset to zero values.
+
+```go
+err := kv.PutMetadata(context.Background(), "my-app/database", vault.KVMetadataPutInput{
+    MaxVersions:        10,
+    CASRequired:        true,
+    DeleteVersionAfter: 30 * 24 * time.Hour, // 30 days
+    CustomMetadata: map[string]interface{}{
+        "owner": "platform-team",
+        "env":   "production",
+    },
+})
+```
+
+---
+
+## Patch Metadata
+
+### `PatchMetadata(ctx context.Context, secretPath string, metadata KVMetadataPatchInput) error`
+
+Partially updates metadata. Only the fields you set are changed; nil pointer fields remain unchanged.
+
+```go
+maxVersions := 5
+casRequired := false
+err := kv.PatchMetadata(context.Background(), "my-app/database", vault.KVMetadataPatchInput{
+    MaxVersions: &maxVersions,
+    CASRequired: &casRequired,
+    // CustomMetadata not set, so it remains unchanged
+})
+```
+
+---
+
+## Delete Metadata
+
+### `DeleteMetadata(ctx context.Context, secretPath string) error`
+
+Deletes all versions and metadata for the secret at the given path. This is permanent.
+
+```go
+err := kv.DeleteMetadata(context.Background(), "my-app/database")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+## KVSecret Return Type
+
+```go
+type KVSecret struct {
+    Data            map[string]interface{} // The secret key-value pairs
+    VersionMetadata *KVVersionMetadata     // Metadata for this version
+    CustomMetadata  map[string]interface{} // User-defined metadata
+    Raw             *Secret                // The underlying Secret for lease info
+}
+```
+
+<ResponseField name="Data" type="object">
+  The actual secret data as a map. `nil` if this version has been deleted.
+</ResponseField>
+
+<ResponseField name="VersionMetadata" type="object">
+  Metadata for this specific version.
+  <Expandable title="KVVersionMetadata fields">
+    <ResponseField name="Version" type="integer">Version number.</ResponseField>
+    <ResponseField name="CreatedTime" type="time.Time">When this version was created.</ResponseField>
+    <ResponseField name="DeletionTime" type="time.Time">When this version was deleted (zero if not deleted).</ResponseField>
+    <ResponseField name="Destroyed" type="boolean">Whether this version's data has been permanently destroyed.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="CustomMetadata" type="object">
+  User-defined metadata key-value pairs.
+</ResponseField>
+
+<ResponseField name="Raw" type="*Secret">
+  The underlying `*Secret` containing lease information and request ID.
+</ResponseField>
+
+---
+
+## KVMetadata Return Type
+
+```go
+type KVMetadata struct {
+    CASRequired        bool
+    CreatedTime        time.Time
+    CurrentVersion     int
+    CustomMetadata     map[string]interface{}
+    DeleteVersionAfter time.Duration
+    MaxVersions        int
+    OldestVersion      int
+    UpdatedTime        time.Time
+    Versions           map[string]KVVersionMetadata // keyed by stringified version number
+    Raw                *Secret
+}
+```
+
+<ResponseField name="CASRequired" type="boolean">
+  Whether check-and-set is required for writes.
+</ResponseField>
+
+<ResponseField name="CurrentVersion" type="integer">
+  The latest version number.
+</ResponseField>
+
+<ResponseField name="MaxVersions" type="integer">
+  Maximum number of versions retained. `0` means unlimited (up to system default).
+</ResponseField>
+
+<ResponseField name="OldestVersion" type="integer">
+  The oldest available version number.
+</ResponseField>
+
+<ResponseField name="DeleteVersionAfter" type="duration">
+  Duration after which versions are automatically deleted.
+</ResponseField>
+
+<ResponseField name="Versions" type="object">
+  Map of stringified version number to `KVVersionMetadata`.
+</ResponseField>

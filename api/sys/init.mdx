@@ -1,0 +1,158 @@
+---
+title: "sys/init"
+description: "Check initialization status and initialize a new Vault cluster."
+---
+
+The `/sys/init` endpoint is used to check whether Vault has been initialized and to perform the initialization.
+
+## Check Init Status
+
+Returns the initialization status of Vault.
+
+```
+GET /v1/sys/init
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl https://vault.example.com/v1/sys/init
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+initialized, err := client.Sys().InitStatus()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Vault initialized: %v\n", initialized)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{"initialized": true}
+```
+
+<ResponseField name="initialized" type="boolean">
+  Whether Vault has been initialized.
+</ResponseField>
+
+---
+
+## Initialize Vault
+
+Initializes a new Vault. The initialization information is only returned once. If you lose it, you must reinitialize Vault.
+
+<Warning>
+  This endpoint only works on an uninitialized Vault. Sending a request to an already-initialized Vault returns a 400 error.
+</Warning>
+
+```
+PUT /v1/sys/init
+```
+
+### Request Parameters
+
+<ParamField body="secret_shares" type="integer" required>
+  The number of shares to split the master key into.
+</ParamField>
+
+<ParamField body="secret_threshold" type="integer" required>
+  The number of shares required to reconstruct the master key. Must be less than or equal to `secret_shares`.
+</ParamField>
+
+<ParamField body="stored_shares" type="integer">
+  Number of shares that should be encrypted by the HSM and stored for auto-unseal. Requires HSM integration.
+</ParamField>
+
+<ParamField body="pgp_keys" type="array">
+  Array of PGP public keys (base64-encoded). If provided, the unseal keys will be encrypted with these keys.
+</ParamField>
+
+<ParamField body="recovery_shares" type="integer">
+  Number of shares to split the recovery key into. Requires HSM integration.
+</ParamField>
+
+<ParamField body="recovery_threshold" type="integer">
+  Number of shares required to reconstruct the recovery key.
+</ParamField>
+
+<ParamField body="recovery_pgp_keys" type="array">
+  Array of PGP public keys to encrypt recovery key shares.
+</ParamField>
+
+<ParamField body="root_token_pgp_key" type="string">
+  PGP public key (base64-encoded) to encrypt the initial root token.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{
+    "secret_shares": 5,
+    "secret_threshold": 3
+  }' \
+  https://vault.example.com/v1/sys/init
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+initResp, err := client.Sys().Init(&api.InitRequest{
+    SecretShares:    5,
+    SecretThreshold: 3,
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Root Token:", initResp.RootToken)
+fmt.Println("Unseal Keys:", initResp.Keys)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "keys": [
+    "hex-encoded-key-1",
+    "hex-encoded-key-2",
+    "hex-encoded-key-3",
+    "hex-encoded-key-4",
+    "hex-encoded-key-5"
+  ],
+  "keys_base64": [
+    "base64-key-1",
+    "..."
+  ],
+  "recovery_keys": [],
+  "recovery_keys_base64": [],
+  "root_token": "hvs.CAESIJ..."
+}
+```
+
+<ResponseField name="keys" type="array">
+  Hex-encoded unseal keys. Store these securely — they are only returned once.
+</ResponseField>
+
+<ResponseField name="keys_base64" type="array">
+  Base64-encoded unseal keys.
+</ResponseField>
+
+<ResponseField name="recovery_keys" type="array">
+  Hex-encoded recovery keys (HSM configurations only).
+</ResponseField>
+
+<ResponseField name="recovery_keys_base64" type="array">
+  Base64-encoded recovery keys (HSM configurations only).
+</ResponseField>
+
+<ResponseField name="root_token" type="string">
+  The initial root token. Store this securely — it is only returned once.
+</ResponseField>

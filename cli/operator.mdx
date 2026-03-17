@@ -1,0 +1,416 @@
+---
+title: "vault operator"
+description: "Operator-level commands for initializing, sealing, rekeying, rotating, and managing Vault's Raft cluster."
+---
+
+## Overview
+
+The `vault operator` command groups subcommands for operators and administrators managing Vault's lifecycle.
+
+```
+Usage: vault operator <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `init` | Initialize a new Vault server |
+| `unseal` | Unseal the Vault server |
+| `seal` | Seal the Vault server |
+| `key-status` | Print information about the active encryption key |
+| `rekey` | Generate a new set of unseal keys |
+| `rotate` | Rotate the underlying encryption key |
+| `step-down` | Force the active node to step down as leader |
+| `generate-root` | Generate a new root token |
+| `migrate` | Migrate Vault data between storage backends |
+| `members` | List the active and standby nodes |
+| `diagnose` | Perform a diagnostic check of the Vault configuration |
+| `raft` | Interact with Vault's Raft storage backend |
+
+---
+
+## vault operator init
+
+Initializes a Vault server. Initialization is the process by which Vault's storage backend is prepared to receive data. In HA mode, you only need to initialize one Vault to initialize the storage backend.
+
+During initialization, Vault generates an in-memory root key and applies Shamir's secret sharing algorithm to create configurable key shares (unseal keys).
+
+```
+Usage: vault operator init [options]
+```
+
+### Common Flags
+
+<ParamField path="-status" type="bool" default="false">
+  Print the current initialization status. Exit code `0` = already initialized, `1` = error, `2` = not initialized.
+</ParamField>
+
+<ParamField path="-key-shares" type="int" default="5">
+  Number of key shares to split the generated root key into. This is the number of unseal keys to generate. Aliases: `-n`.
+</ParamField>
+
+<ParamField path="-key-threshold" type="int" default="3">
+  Number of key shares required to reconstruct the root key. Must be less than or equal to `-key-shares`. Aliases: `-t`.
+</ParamField>
+
+<ParamField path="-pgp-keys" type="string">
+  Comma-separated list of paths to files containing public PGP keys, or Keybase usernames in the format `keybase:<username>`. When supplied, the generated unseal keys will be encrypted and base64-encoded. The number of entries must match `-key-shares`, unless `-stored-shares` is used.
+</ParamField>
+
+<ParamField path="-root-token-pgp-key" type="string">
+  Path to a file containing a binary or base64-encoded public PGP key, or a Keybase username. When supplied, the generated root token will be encrypted and base64-encoded with the given public key.
+</ParamField>
+
+### Consul Options
+
+<ParamField path="-consul-auto" type="bool" default="false">
+  Perform automatic service discovery using Consul in HA mode. When all nodes in a Vault HA cluster are registered with Consul, enables automatic service discovery.
+</ParamField>
+
+<ParamField path="-consul-service" type="string" default="vault">
+  Name of the service in Consul under which the Vault servers are registered.
+</ParamField>
+
+### Auto Unseal Options
+
+<ParamField path="-recovery-shares" type="int" default="5">
+  Number of key shares to split the recovery key into. Only used in auto-unseal mode.
+</ParamField>
+
+<ParamField path="-recovery-threshold" type="int" default="3">
+  Number of key shares required to reconstruct the recovery key. Only used in auto-unseal mode.
+</ParamField>
+
+<ParamField path="-recovery-pgp-keys" type="string">
+  Behaves like `-pgp-keys`, but for the recovery key shares. Only used in auto-unseal mode.
+</ParamField>
+
+### Examples
+
+```bash
+# Initialize with default options (5 shares, threshold 3)
+vault operator init
+
+# Initialize with custom shares/threshold
+vault operator init -key-shares=3 -key-threshold=2
+
+# Initialize and encrypt unseal keys with PGP
+vault operator init \
+    -key-shares=3 \
+    -key-threshold=2 \
+    -pgp-keys="keybase:hashicorp,keybase:jefferai,keybase:sethvargo"
+
+# Encrypt the root token with PGP
+vault operator init -root-token-pgp-key="keybase:hashicorp"
+
+# Check initialization status
+vault operator init -status
+```
+
+---
+
+## vault operator unseal
+
+Provides a portion of the root key to unseal the Vault server. Vault starts in a sealed state and requires a quorum of unseal keys before it can serve requests.
+
+```
+Usage: vault operator unseal [options] [KEY]
+```
+
+<Warning>
+  Providing the unseal key as a command-line argument is not recommended, as the key will appear in your shell history. Prefer the interactive prompt.
+</Warning>
+
+### Flags
+
+<ParamField path="-reset" type="bool" default="false">
+  Discard any previously entered keys to the unseal process.
+</ParamField>
+
+<ParamField path="-migrate" type="bool" default="false">
+  Indicate that this share is provided with the intent that it is part of a seal migration process.
+</ParamField>
+
+### Examples
+
+```bash
+# Prompt for key interactively
+vault operator unseal
+
+# Provide key as argument (avoid in production)
+vault operator unseal IXyR0OJnSFobekZMMCKCoVEpT7wI6l+USMzE3IcyDyo=
+
+# Reset the unseal process
+vault operator unseal -reset
+```
+
+---
+
+## vault operator seal
+
+Seals the Vault server. Sealing tells the Vault server to stop responding to any operations until it is unsealed. The server discards the in-memory root key.
+
+```
+Usage: vault operator seal [options]
+```
+
+### Examples
+
+```bash
+vault operator seal
+```
+
+---
+
+## vault operator key-status
+
+Prints information about the active encryption key used by Vault to encrypt data at rest, including the key term and installation time.
+
+```
+Usage: vault operator key-status [options]
+```
+
+### Examples
+
+```bash
+vault operator key-status
+vault operator key-status -format=json
+```
+
+---
+
+## vault operator rekey
+
+Generates a new set of unseal keys. This can optionally change the total number of key shares or the required threshold. The operation is zero-downtime but requires a quorum of existing unseal keys.
+
+```
+Usage: vault operator rekey [options] [KEY]
+```
+
+### Flags
+
+<ParamField path="-init" type="bool" default="false">
+  Initialize the rekeying operation. Can only be done if no rekeying operation is currently in progress.
+</ParamField>
+
+<ParamField path="-cancel" type="bool" default="false">
+  Reset the rekeying progress. Discards any submitted unseal keys or recovery keys.
+</ParamField>
+
+<ParamField path="-status" type="bool" default="false">
+  Print the current rekey attempt status without providing an unseal or recovery key.
+</ParamField>
+
+<ParamField path="-key-shares" type="int" default="5">
+  Number of key shares to split the generated root key into. Aliases: `-n`.
+</ParamField>
+
+<ParamField path="-key-threshold" type="int" default="3">
+  Number of key shares required to reconstruct the root key. Must be less than or equal to `-key-shares`. Aliases: `-t`.
+</ParamField>
+
+<ParamField path="-nonce" type="string">
+  Nonce value provided at initialization. The same nonce must be provided with each unseal or recovery key.
+</ParamField>
+
+<ParamField path="-target" type="string" default="barrier">
+  Target for rekeying. `recovery` only applies when HSM support is enabled. Values: `barrier`, `recovery`.
+</ParamField>
+
+<ParamField path="-verify" type="bool" default="false">
+  Indicates that the action will be affecting verification for the current rekey attempt.
+</ParamField>
+
+<ParamField path="-pgp-keys" type="string">
+  Comma-separated list of paths to files containing public PGP keys or Keybase usernames.
+</ParamField>
+
+<ParamField path="-backup" type="bool" default="false">
+  Store a backup of the current PGP-encrypted unseal or recovery keys in Vault's core.
+</ParamField>
+
+<ParamField path="-backup-delete" type="bool" default="false">
+  Delete any stored backup unseal or recovery keys.
+</ParamField>
+
+<ParamField path="-backup-retrieve" type="bool" default="false">
+  Retrieve the backed-up unseal or recovery keys. Only available if PGP keys were provided and the backup has not been deleted.
+</ParamField>
+
+### Examples
+
+```bash
+# Initialize a rekey with new key configuration
+vault operator rekey -init -key-shares=15 -key-threshold=9
+
+# Rekey with PGP encryption
+vault operator rekey \
+    -init \
+    -key-shares=3 \
+    -key-threshold=2 \
+    -pgp-keys="keybase:hashicorp,keybase:jefferai,keybase:sethvargo"
+
+# Provide an unseal key during rekey
+vault operator rekey -nonce=<nonce> <KEY>
+
+# Check rekey status
+vault operator rekey -status
+
+# Cancel the rekey process
+vault operator rekey -cancel
+
+# Retrieve backup keys
+vault operator rekey -backup-retrieve
+
+# Delete backup keys
+vault operator rekey -backup-delete
+```
+
+---
+
+## vault operator rotate
+
+Rotates the underlying encryption key used to encrypt data at rest. This operation is online and does not require a seal/unseal cycle.
+
+```
+Usage: vault operator rotate [options]
+```
+
+### Examples
+
+```bash
+vault operator rotate
+```
+
+---
+
+## vault operator step-down
+
+Forces the active Vault node to step down from its leadership role. The node will remain in standby mode and another node will be elected as the new active node.
+
+```
+Usage: vault operator step-down [options]
+```
+
+### Examples
+
+```bash
+vault operator step-down
+```
+
+---
+
+## vault operator raft
+
+Groups subcommands for interacting with Vault's Raft integrated storage backend.
+
+```
+Usage: vault operator raft <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `join` | Join a node to the Raft cluster |
+| `list-peers` | List the current Raft peer set |
+| `remove-peer` | Remove a node from the Raft cluster |
+| `snapshot save` | Save a snapshot of the Raft cluster state |
+| `snapshot restore` | Restore a snapshot to the Raft cluster |
+| `snapshot inspect` | Inspect the contents of a snapshot |
+| `autopilot get-config` | Get the Autopilot configuration |
+| `autopilot set-config` | Set the Autopilot configuration |
+| `autopilot state` | Get the Autopilot state |
+
+### vault operator raft join
+
+```bash
+vault operator raft join https://127.0.0.1:8200
+```
+
+### vault operator raft list-peers
+
+```bash
+vault operator raft list-peers
+vault operator raft list-peers -format=json
+```
+
+### vault operator raft remove-peer
+
+```bash
+vault operator raft remove-peer -server-id=node1
+```
+
+### vault operator raft snapshot save
+
+```bash
+vault operator raft snapshot save out.snap
+```
+
+### vault operator raft snapshot restore
+
+```bash
+vault operator raft snapshot restore out.snap
+```
+
+### vault operator raft snapshot inspect
+
+```bash
+vault operator raft snapshot inspect out.snap
+```
+
+---
+
+## vault operator generate-root
+
+Generates a new root token using a threshold of unseal or recovery keys. Useful for recovering access when the original root token is lost.
+
+```
+Usage: vault operator generate-root [options] [KEY]
+```
+
+### Examples
+
+```bash
+# Initialize root token generation
+vault operator generate-root -init
+
+# Provide an unseal key
+vault operator generate-root -nonce=<nonce> <KEY>
+
+# Check status
+vault operator generate-root -status
+
+# Cancel
+vault operator generate-root -cancel
+```
+
+---
+
+## vault operator diagnose
+
+Performs a diagnostic check of the Vault server configuration and reports any issues found.
+
+```
+Usage: vault operator diagnose [options]
+```
+
+### Examples
+
+```bash
+vault operator diagnose -config=/etc/vault/config.hcl
+```
+
+---
+
+## vault operator members
+
+Lists the active and standby nodes in the Vault cluster.
+
+```
+Usage: vault operator members [options]
+```
+
+### Examples
+
+```bash
+vault operator members
+vault operator members -format=json
+```

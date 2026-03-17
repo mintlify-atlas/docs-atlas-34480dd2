@@ -1,0 +1,125 @@
+---
+title: "vault login"
+description: "Authenticate to Vault using a supported auth method and cache the resulting token locally."
+---
+
+## Overview
+
+The `vault login` command authenticates users or machines to Vault using the provided arguments. A successful authentication results in a Vault token which is cached on the local machine for future requests.
+
+The default auth method is `token`. If not supplied via the CLI, Vault will prompt for input.
+
+```
+Usage: vault login [options] [AUTH K=V...]
+```
+
+## Flags
+
+<ParamField path="-method" type="string" default="token">
+  Type of authentication to use such as `userpass` or `ldap`. This corresponds to the TYPE, not the enabled path. Use `-path` to specify the path where the authentication is enabled.
+</ParamField>
+
+<ParamField path="-path" type="string">
+  Remote path in Vault where the auth method is enabled. Defaults to the TYPE of method (e.g. `userpass` → `userpass/`).
+</ParamField>
+
+<ParamField path="-no-store" type="bool" default="false">
+  Do not persist the token to the token helper (usually the local filesystem) after authentication. The token will only be displayed in the command output.
+</ParamField>
+
+<ParamField path="-no-print" type="bool" default="false">
+  Do not display the token. The token will still be stored to the configured token helper.
+</ParamField>
+
+<ParamField path="-token-only" type="bool" default="false">
+  Output only the token with no verification. This flag is a shortcut for `-field=token -no-store`. Setting those flags to other values will have no effect.
+</ParamField>
+
+<ParamField path="-field" type="string">
+  Print only the value of a specific field from the authentication response. Useful for scripting.
+</ParamField>
+
+<ParamField path="-format" type="string" default="table">
+  Output format. One of `table`, `json`, or `yaml`.
+</ParamField>
+
+<Note>
+  `-no-store` and `-no-print` cannot be used together.
+</Note>
+
+## Examples
+
+<Tabs>
+  <Tab title="Token auth">
+    ```bash
+    # Login with a token directly
+    vault login s.XXXXXXX
+
+    # Or with explicit method
+    vault login -method=token token=s.XXXXXXX
+    ```
+  </Tab>
+  <Tab title="Userpass">
+    ```bash
+    vault login -method=userpass username=my-username
+    # Vault will prompt for the password
+    ```
+  </Tab>
+  <Tab title="LDAP">
+    ```bash
+    vault login -method=ldap username=mitchellh
+    ```
+  </Tab>
+  <Tab title="GitHub">
+    ```bash
+    vault login -method=github
+    # Vault will prompt for a GitHub personal access token
+    ```
+  </Tab>
+  <Tab title="OIDC">
+    ```bash
+    vault login -method=oidc role=my-role
+    ```
+  </Tab>
+  <Tab title="Cert (TLS)">
+    ```bash
+    vault login -method=cert -client-cert=cert.pem -client-key=key.pem
+    ```
+  </Tab>
+  <Tab title="Custom path">
+    ```bash
+    # GitHub auth enabled at a non-standard path "github-prod"
+    vault login -method=github -path=github-prod
+    ```
+  </Tab>
+  <Tab title="Token only (scripting)">
+    ```bash
+    TOKEN=$(vault login -method=userpass -token-only username=myuser)
+    ```
+  </Tab>
+</Tabs>
+
+## Token Storage
+
+After a successful login, the token is stored using the configured token helper (defaults to `~/.vault-token`). All subsequent Vault CLI commands automatically use this token.
+
+<Warning>
+  If the `VAULT_TOKEN` environment variable is set, it takes precedence over the stored token. The CLI will print a warning if this variable is set after a `vault login`.
+</Warning>
+
+## Response Wrapping
+
+If the login request uses response wrapping (via `-wrap-ttl`), the returned token is automatically unwrapped unless:
+
+- `-token-only` is used — the wrapping token itself is output.
+- `-no-store` is used — the details of the wrapping token are output.
+
+## Auth Method Help
+
+To see the configuration parameters for a specific auth method:
+
+```bash
+vault auth help userpass
+vault auth help ldap
+vault auth help github
+```

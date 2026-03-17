@@ -1,97 +1,66 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "HashiCorp Vault Documentation"
+description: "Secrets management, encryption as a service, and privileged access management"
 ---
 
-## Setting up
+<img
+  className="block"
+  src="https://media.brand.dev/c0e3d4ff-bfbb-416c-ab8e-a654c3c04103.svg"
+  alt="HashiCorp Vault"
+  style={{ height: "60px", marginBottom: "2rem" }}
+/>
 
-Get your documentation site up and running in minutes.
+## What is Vault?
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+Vault is a tool for securely accessing **secrets**. A secret is anything you want to tightly control access to — API keys, passwords, certificates, encryption keys, and more. Vault provides a unified interface to any secret while providing tight access control and recording a detailed audit log.
 
-## Make it yours
+## Get started
 
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={3}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn what Vault is and why you need it
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install Vault and store your first secret in 5 minutes
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand how Vault works under the hood
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## Key features
 
-Everything you need to create world-class documentation.
+<CardGroup cols={2}>
+  <Card title="Secure Secret Storage" icon="lock" href="/secrets/kv">
+    Store arbitrary secrets encrypted at rest
+  </Card>
+  <Card title="Dynamic Secrets" icon="bolt" href="/secrets/database">
+    Generate short-lived credentials on demand
+  </Card>
+  <Card title="Encryption as a Service" icon="shield" href="/secrets/transit">
+    Encrypt data without storing it in Vault
+  </Card>
+  <Card title="PKI & Certificates" icon="certificate" href="/secrets/pki">
+    Issue and manage TLS certificates at scale
+  </Card>
+  <Card title="Auth Methods" icon="key" href="/auth/overview">
+    Authenticate with AWS, LDAP, GitHub, and more
+  </Card>
+  <Card title="ACL Policies" icon="shield-halved" href="/security/acl">
+    Fine-grained access control with HCL policies
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## Explore the docs
 
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<CardGroup cols={3}>
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview">
+    Full reference for all Vault CLI commands
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    HTTP API and Go SDK documentation
+  </Card>
+  <Card title="Operations" icon="server" href="/operations/raft">
+    Deployment, HA, backup, and monitoring
+  </Card>
+</CardGroup>

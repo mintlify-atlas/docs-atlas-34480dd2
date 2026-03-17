@@ -1,0 +1,185 @@
+---
+title: "Authentication"
+description: "How to authenticate with Vault using tokens, the login flow, token renewal, and the VAULT_TOKEN environment variable."
+---
+
+Vault uses token-based authentication for all API requests. Every request must present a valid token with sufficient permissions for the operation.
+
+## Token Auth via Header
+
+Pass your token in the `X-Vault-Token` header:
+
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/secret/data/my-secret
+```
+
+## Login Flow
+
+Most auth methods follow a common login pattern: POST credentials to `/v1/auth/<method>/login` and receive a client token in return.
+
+### Endpoint
+
+```
+POST /v1/auth/<method>/login
+```
+
+### Example: UserPass Login
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"password": "my-password"}' \
+  https://vault.example.com/v1/auth/userpass/login/my-username
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+import (
+    vault "github.com/hashicorp/vault/api"
+    userpassAuth "github.com/hashicorp/vault/api/auth/userpass"
+)
+
+client, _ := vault.NewClient(vault.DefaultConfig())
+
+userpassAuth, _ := userpassAuth.NewUserpassAuth(
+    "my-username",
+    &userpassAuth.Password{FromString: "my-password"},
+)
+
+authInfo, err := client.Auth().Login(context.Background(), userpassAuth)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(authInfo.Auth.ClientToken)
+```
+  </Tab>
+</Tabs>
+
+### Login Response
+
+```json
+{
+  "auth": {
+    "client_token": "hvs.CAESIJ...",
+    "accessor": "abc123",
+    "policies": ["default", "my-policy"],
+    "token_policies": ["default", "my-policy"],
+    "identity_policies": [],
+    "metadata": {"username": "my-username"},
+    "lease_duration": 3600,
+    "renewable": true,
+    "entity_id": "abc...",
+    "orphan": false
+  }
+}
+```
+
+<ResponseField name="auth.client_token" type="string">
+  The token to use in subsequent `X-Vault-Token` headers.
+</ResponseField>
+
+<ResponseField name="auth.accessor" type="string">
+  A token accessor that can be used to look up, renew, or revoke the token without possessing it.
+</ResponseField>
+
+<ResponseField name="auth.policies" type="array">
+  Combined list of token and identity policies attached to this token.
+</ResponseField>
+
+<ResponseField name="auth.lease_duration" type="integer">
+  TTL of the token in seconds.
+</ResponseField>
+
+<ResponseField name="auth.renewable" type="boolean">
+  Whether this token can be renewed.
+</ResponseField>
+
+## Token Lookup (Self)
+
+Look up details about the currently authenticated token.
+
+```
+GET /v1/auth/token/lookup-self
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/auth/token/lookup-self
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+secret, err := client.Auth().Token().LookupSelf()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(secret.Data)
+```
+  </Tab>
+</Tabs>
+
+## Token Renewal
+
+Renew the currently authenticated token to extend its TTL.
+
+```
+PUT /v1/auth/token/renew-self
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"increment": 3600}' \
+  https://vault.example.com/v1/auth/token/renew-self
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+// Renew for an additional 3600 seconds
+secret, err := client.Auth().Token().RenewSelf(3600)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("New TTL:", secret.Auth.LeaseDuration)
+```
+  </Tab>
+</Tabs>
+
+<ParamField body="increment" type="integer">
+  Desired increment in seconds. The actual TTL granted is capped by the token's `explicit_max_ttl` and the system's `max_lease_ttl`.
+</ParamField>
+
+## Using VAULT_TOKEN
+
+Set the `VAULT_TOKEN` environment variable so the Go SDK picks it up automatically:
+
+```bash
+export VAULT_ADDR="https://vault.example.com"
+export VAULT_TOKEN="hvs.CAESIJ..."
+```
+
+```go
+// Token is set automatically from the environment
+client, err := vault.NewClient(vault.DefaultConfig())
+if err != nil {
+    log.Fatal(err)
+}
+// No client.SetToken() call needed
+secret, _ := client.Logical().Read("secret/data/my-secret")
+```
+
+<Note>
+  Tokens prefixed with `hvs.` are service tokens (Vault 1.10+). Older tokens use a different prefix. The `X-Vault-Token` header accepts both formats.
+</Note>

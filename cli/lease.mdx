@@ -1,0 +1,122 @@
+---
+title: "vault lease"
+description: "Lookup, renew, and revoke secret leases in Vault."
+---
+
+## Overview
+
+The `vault lease` command groups subcommands for interacting with leases. Every secret in Vault has a lease associated with it. Leases define how long a secret is valid and whether it can be renewed.
+
+```
+Usage: vault lease <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `lookup` | Lookup the lease of a secret |
+| `renew` | Renew the lease of a secret |
+| `revoke` | Revoke leases and secrets |
+
+---
+
+## vault lease lookup
+
+Looks up the lease information of a secret by its lease ID.
+
+```
+Usage: vault lease lookup ID
+```
+
+### Examples
+
+```bash
+vault lease lookup database/creds/readonly/2f6a614c-...
+
+# JSON output
+vault lease lookup -format=json database/creds/readonly/2f6a614c-...
+```
+
+### Output Fields
+
+The output includes:
+
+| Field | Description |
+|---|---|
+| `id` | The lease ID |
+| `issue_time` | When the lease was issued |
+| `expire_time` | When the lease will expire |
+| `last_renewal_time` | When the lease was last renewed |
+| `renewable` | Whether the lease can be renewed |
+| `ttl` | Remaining TTL in seconds |
+
+---
+
+## vault lease renew
+
+Renews the lease on a secret, extending the time that it can be used before Vault revokes it. Renewal will fail if the secret is not renewable, has already been revoked, or has reached its maximum TTL.
+
+```
+Usage: vault lease renew [options] ID
+```
+
+### Flags
+
+<ParamField path="-increment" type="duration" default="0">
+  Request a specific increment in seconds. Vault is not required to honor this request. Specified as a numeric string with suffix like `30s` or `5m`.
+</ParamField>
+
+### Examples
+
+```bash
+# Renew a lease
+vault lease renew database/creds/readonly/2f6a614c-...
+
+# Renew with a requested increment of 1 hour
+vault lease renew -increment=1h database/creds/readonly/2f6a614c-...
+```
+
+---
+
+## vault lease revoke
+
+Revokes secrets by their lease ID. Can revoke a single secret or multiple secrets based on a path-matched prefix.
+
+The default behavior is asynchronous: Vault queues the revocation and retries if it fails (including across restarts). Use `-sync` to force a synchronous operation.
+
+```
+Usage: vault lease revoke [options] ID
+```
+
+### Flags
+
+<ParamField path="-force" type="bool" default="false">
+  Delete the lease from Vault even if the secret engine revocation fails. Intended for recovery situations where the secret in the target secret engine was manually removed. If this flag is specified, `-prefix` is also required. Aliases: `-f`.
+</ParamField>
+
+<ParamField path="-prefix" type="bool" default="false">
+  Treat the ID as a prefix instead of an exact lease ID. This can revoke multiple leases simultaneously.
+</ParamField>
+
+<ParamField path="-sync" type="bool" default="false">
+  Force a synchronous operation. On failure, it is up to the caller to retry.
+</ParamField>
+
+<Warning>
+  Using `-force` with `-prefix` can cause Vault to become out of sync with secret engines. Use with caution.
+</Warning>
+
+### Examples
+
+```bash
+# Revoke a single lease
+vault lease revoke database/creds/readonly/2f6a614c-...
+
+# Revoke all leases for a role (prefix)
+vault lease revoke -prefix aws/creds/deploy
+
+# Force-delete leases even if the engine fails to revoke
+vault lease revoke -force -prefix consul/creds
+
+# Synchronous revocation
+vault lease revoke -sync database/creds/readonly/2f6a614c-...
+```

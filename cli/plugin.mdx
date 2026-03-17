@@ -1,0 +1,261 @@
+---
+title: "vault plugin"
+description: "Register, list, deregister, reload, and get info about plugins in the Vault plugin catalog."
+---
+
+## Overview
+
+The `vault plugin` command groups subcommands for managing Vault's plugin catalog. Plugins extend Vault's functionality with custom secrets engines and auth methods.
+
+```
+Usage: vault plugin <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `register` | Register a new plugin in the catalog |
+| `deregister` | Deregister an existing plugin |
+| `list` | List available plugins |
+| `info` | Read information about a plugin |
+| `reload` | Reload a plugin's backend |
+| `reload-status` | Get the status of an async plugin reload |
+| `runtime register` | Register a plugin runtime |
+| `runtime deregister` | Deregister a plugin runtime |
+| `runtime list` | List plugin runtimes |
+| `runtime info` | Get info about a plugin runtime |
+
+---
+
+## vault plugin register
+
+Registers a new plugin in the catalog. The plugin binary must exist in Vault's configured plugin directory (`plugin_directory` in the server configuration).
+
+```
+Usage: vault plugin register [options] TYPE NAME
+```
+
+The TYPE argument takes `auth`, `database`, or `secret`.
+
+### Flags
+
+<ParamField path="-sha256" type="string">
+  SHA256 of the plugin binary or OCI image. Required when registering with a plugin binary. Should not be specified when registering with a plugin artifact.
+</ParamField>
+
+<ParamField path="-command" type="string">
+  Command to spawn the plugin. If `-sha256` is provided to register with a plugin binary, defaults to the name of the plugin if neither `oci_image` nor `command` is specified.
+</ParamField>
+
+<ParamField path="-args" type="string">
+  Argument to pass to the plugin when starting. Can be specified multiple times to specify multiple args.
+</ParamField>
+
+<ParamField path="-env" type="string">
+  Environment variables to set for the plugin when starting. Format: `KEY=VALUE`. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-version" type="string">
+  Semantic version of the plugin. Required when registering with a plugin artifact. Optional when registering with a binary. Used as the tag when specifying `oci_image`.
+</ParamField>
+
+<ParamField path="-oci_image" type="string">
+  OCI image to run. If specified, setting `command`, `args`, and `env` will update the container's entrypoint, args, and environment variables respectively.
+</ParamField>
+
+<ParamField path="-runtime" type="string">
+  Vault plugin runtime to use if `oci_image` is specified.
+</ParamField>
+
+<ParamField path="-download" type="bool">
+  Enterprise only. If set, Vault will automatically download the plugin from `releases.hashicorp.com`.
+</ParamField>
+
+### Examples
+
+```bash
+# Register an auth plugin with SHA256
+vault plugin register \
+    -sha256=d3f0a8bdc... \
+    -version=v1.0.0 \
+    auth my-custom-plugin
+
+# Register with custom startup arguments
+vault plugin register \
+    -sha256=d3f0a8bdc... \
+    -version=v1.0.0 \
+    -args=--with-glibc,--with-cgo \
+    auth my-custom-plugin
+
+# Register a secrets plugin without specifying type
+vault plugin register -sha256=d3f0a8bdc... my-secrets-plugin
+
+# Register an enterprise plugin via download
+vault plugin register \
+    -version=v0.17.0+ent \
+    -download=true \
+    secret vault-plugin-secrets-keymgmt
+```
+
+---
+
+## vault plugin deregister
+
+Deregisters an existing plugin in the catalog. If the plugin does not exist, no action is taken (the command is idempotent).
+
+```
+Usage: vault plugin deregister [options] TYPE NAME
+```
+
+The TYPE argument takes `auth`, `database`, or `secret`.
+
+### Flags
+
+<ParamField path="-version" type="string">
+  Semantic version of the plugin to deregister. If unset, only an unversioned plugin may be deregistered.
+</ParamField>
+
+### Examples
+
+```bash
+# Deregister an unversioned auth plugin
+vault plugin deregister auth my-custom-plugin
+
+# Deregister a specific version
+vault plugin deregister -version=v1.0.0 auth my-custom-plugin
+```
+
+<Note>
+  Built-in plugins cannot be deregistered.
+</Note>
+
+---
+
+## vault plugin list
+
+Lists available plugins registered in the catalog. This shows availability, not whether they are currently in use.
+
+```
+Usage: vault plugin list [options] [TYPE]
+```
+
+The optional TYPE argument takes `auth`, `database`, or `secret`.
+
+### Flags
+
+<ParamField path="-detailed" type="bool" default="false">
+  Print detailed plugin information such as plugin type, version, container support, and deprecation status. Only applicable to table-formatted output.
+</ParamField>
+
+### Examples
+
+```bash
+# List all plugins
+vault plugin list
+
+# List only database plugins
+vault plugin list database
+
+# Detailed listing
+vault plugin list -detailed
+
+# JSON output
+vault plugin list -format=json
+```
+
+---
+
+## vault plugin info
+
+Reads information about a plugin in the catalog.
+
+```
+Usage: vault plugin info [options] TYPE NAME
+```
+
+### Flags
+
+<ParamField path="-version" type="string">
+  The semantic version of the plugin to look up.
+</ParamField>
+
+### Examples
+
+```bash
+vault plugin info auth my-custom-plugin
+vault plugin info -version=v1.0.0 auth my-custom-plugin
+```
+
+---
+
+## vault plugin reload
+
+Reloads mounted plugin backends. This restarts the plugin process, picking up any changes to the binary.
+
+```
+Usage: vault plugin reload [options]
+```
+
+### Flags
+
+<ParamField path="-plugin" type="string">
+  Name of the plugin to reload. Reloads all mounts using the plugin.
+</ParamField>
+
+<ParamField path="-mounts" type="string">
+  Comma-separated list of mount paths to reload the plugin backend for.
+</ParamField>
+
+<ParamField path="-scope" type="string">
+  The scope of the reload. For a local reload, omit this flag. For a global reload (all nodes), set to `global`.
+</ParamField>
+
+### Examples
+
+```bash
+# Reload a plugin by name
+vault plugin reload -plugin=my-auth-plugin
+
+# Reload specific mount paths
+vault plugin reload -mounts=auth/my-auth/,auth/other-auth/
+
+# Global reload across all cluster nodes
+vault plugin reload -plugin=my-auth-plugin -scope=global
+```
+
+---
+
+## vault plugin runtime
+
+Groups subcommands for managing plugin runtimes (used for containerized plugins).
+
+```
+Usage: vault plugin runtime <subcommand> [options] [args]
+```
+
+### vault plugin runtime register
+
+```bash
+vault plugin runtime register \
+    -type=container \
+    -oci-runtime=runsc \
+    my-runtime
+```
+
+### vault plugin runtime list
+
+```bash
+vault plugin runtime list
+vault plugin runtime list -type=container
+```
+
+### vault plugin runtime info
+
+```bash
+vault plugin runtime info -type=container my-runtime
+```
+
+### vault plugin runtime deregister
+
+```bash
+vault plugin runtime deregister -type=container my-runtime
+```

@@ -1,0 +1,222 @@
+---
+title: "sys/seal"
+description: "Check seal status, seal, and unseal Vault."
+---
+
+The seal endpoints allow you to check Vault's seal status, seal Vault, and provide unseal key shards to unseal it.
+
+## Get Seal Status
+
+Returns the current seal status of Vault. This endpoint does not require authentication.
+
+```
+GET /v1/sys/seal-status
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl https://vault.example.com/v1/sys/seal-status
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+status, err := client.Sys().SealStatus()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Sealed: %v, Progress: %d/%d\n", status.Sealed, status.Progress, status.T)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "type": "shamir",
+  "initialized": true,
+  "sealed": false,
+  "t": 3,
+  "n": 5,
+  "progress": 0,
+  "nonce": "",
+  "version": "1.17.0",
+  "build_date": "2024-01-01T00:00:00Z",
+  "migration": false,
+  "cluster_name": "vault-cluster",
+  "cluster_id": "abc123",
+  "recovery_seal": false,
+  "storage_type": "raft"
+}
+```
+
+<ResponseField name="type" type="string">
+  Seal type (e.g., `shamir`, `awskms`, `azurekeyvault`).
+</ResponseField>
+
+<ResponseField name="initialized" type="boolean">
+  Whether Vault has been initialized.
+</ResponseField>
+
+<ResponseField name="sealed" type="boolean">
+  Whether Vault is currently sealed.
+</ResponseField>
+
+<ResponseField name="t" type="integer">
+  The threshold of shares required to unseal.
+</ResponseField>
+
+<ResponseField name="n" type="integer">
+  Total number of shares.
+</ResponseField>
+
+<ResponseField name="progress" type="integer">
+  Number of unseal keys provided so far during an unseal attempt.
+</ResponseField>
+
+<ResponseField name="nonce" type="string">
+  Nonce for the current unseal attempt.
+</ResponseField>
+
+<ResponseField name="version" type="string">
+  Vault version.
+</ResponseField>
+
+<ResponseField name="build_date" type="string">
+  Build date of the Vault binary.
+</ResponseField>
+
+<ResponseField name="migration" type="boolean">
+  Whether Vault is in seal migration mode.
+</ResponseField>
+
+<ResponseField name="cluster_name" type="string">
+  Name of the Vault cluster (if configured).
+</ResponseField>
+
+<ResponseField name="cluster_id" type="string">
+  Unique ID of the Vault cluster.
+</ResponseField>
+
+<ResponseField name="recovery_seal" type="boolean">
+  Whether this is a recovery seal (HSM configurations).
+</ResponseField>
+
+<ResponseField name="recovery_seal_type" type="string">
+  The recovery seal type, if applicable.
+</ResponseField>
+
+<ResponseField name="storage_type" type="string">
+  The storage backend type (e.g., `raft`, `consul`).
+</ResponseField>
+
+---
+
+## Seal Vault
+
+Seals the Vault. Requires a token with `sudo` capability or the root token.
+
+```
+PUT /v1/sys/seal
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.ROOT..." \
+  https://vault.example.com/v1/sys/seal
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().Seal()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Vault has been sealed")
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Unseal Vault
+
+Submit a single unseal key shard. Repeat this call with different key shards until the threshold is met.
+
+```
+PUT /v1/sys/unseal
+```
+
+### Request Parameters
+
+<ParamField body="key" type="string">
+  A single master key shard (hex-encoded). Required unless `reset` is true.
+</ParamField>
+
+<ParamField body="reset" type="boolean">
+  When set to `true`, resets the current unseal progress without submitting a new key. Useful if you provided a wrong key.
+</ParamField>
+
+<ParamField body="migrate" type="boolean">
+  When set to `true`, indicates this unseal is part of a seal migration operation.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+# Submit an unseal key
+curl \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"key": "hex-encoded-unseal-key-shard"}' \
+  https://vault.example.com/v1/sys/unseal
+
+# Reset unseal progress
+curl \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"reset": true}' \
+  https://vault.example.com/v1/sys/unseal
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+// Submit a key shard
+status, err := client.Sys().Unseal("hex-encoded-unseal-key-shard")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Sealed: %v, Progress: %d/%d\n", status.Sealed, status.Progress, status.T)
+
+// Submit with options (e.g., migrate)
+status, err = client.Sys().UnsealWithOptions(&api.UnsealOpts{
+    Key:     "hex-encoded-unseal-key-shard",
+    Migrate: true,
+})
+
+// Reset unseal progress
+status, err = client.Sys().ResetUnsealProcess()
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+The response is the same `SealStatusResponse` as the seal-status endpoint. When `sealed` becomes `false`, Vault has been successfully unsealed.
+
+```json
+{
+  "sealed": true,
+  "t": 3,
+  "n": 5,
+  "progress": 1,
+  "nonce": "abc123",
+  "version": "1.17.0"
+}
+```

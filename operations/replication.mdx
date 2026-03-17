@@ -1,0 +1,175 @@
+---
+title: "Replication"
+description: "Configure Performance Replication and Disaster Recovery Replication to scale and protect your Vault clusters."
+---
+
+<Note>
+  Replication is an Enterprise-only feature. It is not available in Vault open-source or Vault Community Edition.
+</Note>
+
+Vault Enterprise supports two types of replication: **Performance Replication** and **Disaster Recovery (DR) Replication**. Both models involve a primary cluster and one or more secondary clusters.
+
+<CardGroup cols={2}>
+  <Card title="Performance Replication" icon="gauge-high">
+    Scale read traffic across multiple clusters. Secondaries can service read requests independently while writes are forwarded to the primary.
+  </Card>
+  <Card title="DR Replication" icon="shield-check">
+    Keep a warm standby cluster for failover. DR secondaries do not service requests under normal conditions.
+  </Card>
+</CardGroup>
+
+## Performance Replication
+
+Performance Replication allows you to distribute read traffic across multiple Vault clusters in different regions or data centers. Secondary clusters receive a continuous stream of changes from the primary and can independently handle read operations.
+
+**How it works:**
+
+- The primary cluster is the source of truth for all write operations.
+- Secondary clusters replicate data from the primary in near-real-time.
+- Clients can read secrets from any secondary without hitting the primary.
+- Write requests to a secondary are forwarded to the primary automatically.
+
+<Info>
+  Performance Replication replicates most mounts and policies, but **local mounts** (created with `-local`) are not replicated. This allows secondaries to have cluster-specific auth methods or secret engines.
+</Info>
+
+### Setting up Performance Replication
+
+<Steps>
+  <Step title="Enable replication on the primary">
+    On the primary cluster, enable performance replication:
+
+    ```bash
+    vault write -f sys/replication/performance/primary/enable
+    ```
+  </Step>
+  <Step title="Generate a secondary token">
+    Generate a token that the secondary will use to join the primary:
+
+    ```bash
+    vault write sys/replication/performance/primary/secondary-token id="secondary-us-west"
+    ```
+
+    The response includes a `wrapping_token` that you pass to the secondary.
+  </Step>
+  <Step title="Enable replication on the secondary">
+    On the secondary cluster, activate replication using the token from the primary:
+
+    ```bash
+    vault write sys/replication/performance/secondary/enable \
+      token="<wrapping_token>"
+    ```
+  </Step>
+  <Step title="Verify replication status">
+    Check that the secondary is connected and caught up:
+
+    ```bash
+    vault read sys/replication/performance/status
+    ```
+  </Step>
+</Steps>
+
+## Disaster Recovery Replication
+
+Disaster Recovery (DR) Replication maintains a fully replicated warm standby. Unlike Performance Replication, DR secondaries do not service requests during normal operation. If the primary fails, an operator promotes the DR secondary to become the new primary.
+
+**Key differences from Performance Replication:**
+
+| Feature | Performance | DR |
+|---------|-------------|----|
+| Handles read requests | Yes | No (standby only) |
+| Handles write requests (forwarded) | Yes | No |
+| Purpose | Scale reads | Failover |
+| Promotion | Not applicable | Manual promotion required |
+
+### Setting up DR Replication
+
+<Steps>
+  <Step title="Enable DR on the primary">
+    ```bash
+    vault write -f sys/replication/dr/primary/enable
+    ```
+  </Step>
+  <Step title="Generate a DR secondary token">
+    ```bash
+    vault write sys/replication/dr/primary/secondary-token id="dr-secondary"
+    ```
+  </Step>
+  <Step title="Activate the DR secondary">
+    ```bash
+    vault write sys/replication/dr/secondary/enable \
+      token="<wrapping_token>"
+    ```
+  </Step>
+  <Step title="Verify DR status">
+    ```bash
+    vault read sys/replication/dr/status
+    ```
+  </Step>
+</Steps>
+
+### Promoting a DR secondary
+
+When the primary is unavailable, promote the DR secondary to become the new primary. This requires a **DR operation token**, which is generated using the DR secondary's unseal keys.
+
+```bash
+# Generate the DR operation token
+vault operator generate-root -dr-token
+
+# Promote the DR secondary
+vault write sys/replication/dr/secondary/promote \
+  dr_operation_token="<dr_operation_token>"
+```
+
+<Warning>
+  Promotion is a one-way operation. Once promoted, the old DR secondary becomes the new primary. If the original primary comes back online, it must be demoted and rejoined as a secondary.
+</Warning>
+
+## Replication tokens
+
+Secondary tokens are single-use, short-lived wrapped tokens used to authorize a secondary cluster to join a primary. They are generated on the primary and consumed on the secondary during the `enable` operation.
+
+- Tokens expire after a short TTL (default: 30 minutes).
+- A token can only be used once.
+- If a token expires or is compromised, generate a new one from the primary.
+
+## Mount filters
+
+Mount filters allow you to control which secret engine mounts and auth method mounts are replicated to specific secondaries. This is useful for compliance or when different regions need access to different secrets.
+
+```bash
+# Allow only specific mounts to replicate to a secondary
+vault write sys/replication/performance/primary/mount-filter/secondary-us-west \
+  mode="allow" \
+  paths="secret/,pki/"
+
+# Block specific mounts from replicating
+vault write sys/replication/performance/primary/mount-filter/secondary-eu \
+  mode="deny" \
+  paths="secret/internal/"
+```
+
+<Tip>
+  Use mount filters to comply with data residency requirements. For example, you can prevent EU-regulated secrets from replicating to clusters outside the EU.
+</Tip>
+
+## Checking replication status
+
+```bash
+# Overall replication status
+vault read sys/replication/status
+
+# Performance replication status
+vault read sys/replication/performance/status
+
+# DR replication status
+vault read sys/replication/dr/status
+```
+
+The status response includes:
+
+- `mode`: `primary` or `secondary`
+- `state`: `idle`, `stream-wals`, `in-sync`, etc.
+- `connection_state`: connectivity to the primary
+- `known_secondaries`: list of connected secondaries (on primary)
+- `last_wal`: last Write-Ahead Log index replicated

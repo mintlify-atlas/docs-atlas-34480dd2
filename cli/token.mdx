@@ -1,0 +1,243 @@
+---
+title: "vault token"
+description: "Create, lookup, renew, revoke, and check capabilities of Vault tokens."
+---
+
+## Overview
+
+The `vault token` command groups subcommands for interacting with tokens.
+
+```
+Usage: vault token <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `create` | Create a new token |
+| `lookup` | Display information about a token |
+| `renew` | Renew a token lease |
+| `revoke` | Revoke a token and its children |
+| `capabilities` | Print capabilities of a token on a path |
+
+---
+
+## vault token create
+
+Creates a new token that can be used for authentication. The generated token will inherit all policies and permissions of the currently authenticated token unless you explicitly define a subset of policies.
+
+```
+Usage: vault token create [options]
+```
+
+### Flags
+
+<ParamField path="-id" type="string">
+  Value for the token. By default, this is an auto-generated string. Specifying this value requires sudo permissions.
+</ParamField>
+
+<ParamField path="-display-name" type="string">
+  Name to associate with this token. This is a non-sensitive value that can be used to help identify created secrets (e.g. prefixes).
+</ParamField>
+
+<ParamField path="-ttl" type="duration">
+  Initial TTL to associate with the token. Token renewals may be able to extend beyond this value, depending on the configured maximum TTLs. Specified as a numeric string with suffix like `30s` or `5m`.
+</ParamField>
+
+<ParamField path="-explicit-max-ttl" type="duration">
+  Explicit maximum lifetime for the token. Unlike normal TTLs, the maximum TTL is a hard limit and cannot be exceeded. Specified as a numeric string with suffix like `30s` or `5m`.
+</ParamField>
+
+<ParamField path="-period" type="duration">
+  If specified, every renewal will use the given period. Periodic tokens do not expire (unless `-explicit-max-ttl` is also provided). Setting this value requires sudo permissions. Specified as a numeric string with suffix like `30s` or `5m`.
+</ParamField>
+
+<ParamField path="-renewable" type="bool" default="true">
+  Allow the token to be renewed up to its maximum TTL.
+</ParamField>
+
+<ParamField path="-orphan" type="bool" default="false">
+  Create the token with no parent. This prevents the token from being revoked when the token which created it expires. Requires root or sudo permissions.
+</ParamField>
+
+<ParamField path="-no-default-policy" type="bool" default="false">
+  Detach the `default` policy from the policy set for this token.
+</ParamField>
+
+<ParamField path="-use-limit" type="int" default="0">
+  Number of times this token can be used. After the last use, the token is automatically revoked. By default, tokens can be used an unlimited number of times until expiration.
+</ParamField>
+
+<ParamField path="-role" type="string">
+  Name of the role to create the token against. Specifying `-role` may override other arguments. The locally authenticated Vault token must have permission for `auth/token/create/<role>`.
+</ParamField>
+
+<ParamField path="-type" type="string" default="service">
+  The type of token to create. Can be `service` or `batch`.
+</ParamField>
+
+<ParamField path="-metadata" type="string">
+  Arbitrary `key=value` metadata to associate with the token. This metadata will appear in the audit log when the token is used. Can be specified multiple times.
+</ParamField>
+
+<ParamField path="-policy" type="string">
+  Name of a policy to associate with this token. Can be specified multiple times to attach multiple policies.
+</ParamField>
+
+<ParamField path="-entity-alias" type="string">
+  Name of the entity alias to associate with during token creation. Only works in combination with `-role` and the entity alias must be listed in `allowed_entity_aliases`. If specified, the entity will not be inherited from the parent.
+</ParamField>
+
+### Examples
+
+```bash
+# Create a token with a 1h TTL and the "dev" policy
+vault token create -ttl=1h -policy=dev
+
+# Create a batch token
+vault token create -type=batch -policy=app
+
+# Create a token with a 10-use limit
+vault token create -use-limit=10 -policy=ops
+
+# Create an orphan token
+vault token create -orphan -policy=admin
+
+# Create a periodic token (does not expire while renewed)
+vault token create -period=24h -policy=service
+
+# Get only the token value (for scripting)
+vault token create -field=token -policy=dev
+```
+
+---
+
+## vault token lookup
+
+Displays information about a token or accessor. If no TOKEN is provided, the locally authenticated token is used.
+
+```
+Usage: vault token lookup [options] [TOKEN | ACCESSOR]
+```
+
+### Flags
+
+<ParamField path="-accessor" type="bool" default="false">
+  Treat the argument as an accessor instead of a token. When this option is selected, the output will NOT include the token.
+</ParamField>
+
+### Examples
+
+```bash
+# Lookup the current token
+vault token lookup
+
+# Lookup a specific token
+vault token lookup 96ddf4bc-d217-f3ba-f9bd-017055595017
+
+# Lookup a token by its accessor
+vault token lookup -accessor 9793c9b3-e04a-46f3-e7b8-748d7da248da
+```
+
+---
+
+## vault token renew
+
+Renews a token's lease, extending the amount of time it can be used. Renewal will fail if the token is not renewable, has been revoked, or has reached its maximum TTL.
+
+```
+Usage: vault token renew [options] [TOKEN]
+```
+
+### Flags
+
+<ParamField path="-accessor" type="bool" default="false">
+  Treat the argument as an accessor instead of a token. When selected, the output will NOT include the token.
+</ParamField>
+
+<ParamField path="-increment" type="duration" default="0">
+  Request a specific increment for renewal. This increment may not be honored, for instance in the case of periodic tokens. If not supplied, Vault will use the default TTL. Specified as a numeric string with suffix like `30s` or `5m`. Alias: `-i`.
+</ParamField>
+
+<ParamField path="-fail-if-not-fulfilled" type="bool" default="false">
+  Fail if the requested TTL increment cannot be fully fulfilled.
+</ParamField>
+
+### Examples
+
+```bash
+# Renew the current token
+vault token renew
+
+# Renew a specific token
+vault token renew 96ddf4bc-d217-f3ba-f9bd-017055595017
+
+# Renew with a requested increment of 30 minutes
+vault token renew -increment=30m 96ddf4bc-d217-f3ba-f9bd-017055595017
+```
+
+---
+
+## vault token revoke
+
+Revokes authentication tokens and their children. If no TOKEN is provided, the locally authenticated token is used.
+
+```
+Usage: vault token revoke [options] [TOKEN | ACCESSOR]
+```
+
+### Flags
+
+<ParamField path="-accessor" type="bool" default="false">
+  Treat the argument as an accessor instead of a token.
+</ParamField>
+
+<ParamField path="-self" type="bool" default="false">
+  Perform the revocation on the currently authenticated token.
+</ParamField>
+
+<ParamField path="-mode" type="string">
+  Type of revocation to perform. If unspecified, Vault revokes the token and all of its children. If `orphan`, Vault revokes only the token, leaving the children as orphans. If `path`, tokens created from the given authentication path prefix are deleted along with their children. Values: `orphan`, `path`.
+</ParamField>
+
+<Note>
+  `-self` cannot be combined with `-accessor` or `-mode`. `-accessor` cannot be combined with `-mode=orphan` or `-mode=path`.
+</Note>
+
+### Examples
+
+```bash
+# Revoke a token and all its children
+vault token revoke 96ddf4bc-d217-f3ba-f9bd-017055595017
+
+# Revoke a token but leave its children as orphans
+vault token revoke -mode=orphan 96ddf4bc-d217-f3ba-f9bd-017055595017
+
+# Revoke the currently authenticated token
+vault token revoke -self
+
+# Revoke by accessor
+vault token revoke -accessor 9793c9b3-e04a-46f3-e7b8-748d7da248da
+
+# Revoke all tokens created from a specific auth path
+vault token revoke -mode=path auth/github/login
+```
+
+---
+
+## vault token capabilities
+
+Prints the list of capabilities of a token for a given path.
+
+```
+Usage: vault token capabilities [TOKEN] PATH
+```
+
+### Examples
+
+```bash
+# Check capabilities of the current token on a path
+vault token capabilities secret/data/myapp
+
+# Check capabilities of a specific token on a path
+vault token capabilities s.XXXXXXX secret/data/myapp
+```

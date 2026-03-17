@@ -1,0 +1,231 @@
+---
+title: "Sentinel Policies"
+description: "Use HashiCorp Sentinel to enforce policy-as-code with fine-grained, logic-based access control in Vault Enterprise."
+---
+
+<Note>
+  Sentinel is available only in **Vault Enterprise**. It is not available in Vault open-source or Vault Community Edition.
+</Note>
+
+HashiCorp Sentinel is a policy-as-code framework that enables fine-grained, logic-based access control beyond what is possible with standard ACL policies. Sentinel policies are evaluated after ACL policies and can impose additional conditions on requests.
+
+## What Sentinel provides
+
+Sentinel extends Vault's authorization model with:
+
+- **Conditional logic**: Allow or deny based on time of day, IP address, request data, identity attributes, and more.
+- **Mandatory enforcement**: Sentinel policies are evaluated as part of the authorization pipeline and cannot be bypassed by token policies alone.
+- **Two policy types**: Endpoint Governing Policies (EGP) apply to specific paths; Role Governing Policies (RGP) apply to tokens and identities.
+
+## Policy types
+
+### Endpoint Governing Policies (EGP)
+
+EGPs are attached to specific Vault path prefixes. Any request to a matching path is evaluated against the policy, regardless of which token makes the request.
+
+**Use EGPs when you want to:**
+- Restrict access to a secret engine path to specific hours.
+- Require requests to a path to originate from a specific CIDR range.
+- Enforce that certain parameters are always set.
+
+```bash
+# Create an EGP
+vault write sys/policies/egp/business-hours \
+  policy="$(base64 business-hours.sentinel)" \
+  enforcement_level="hard-mandatory" \
+  paths="secret/*"
+```
+
+### Role Governing Policies (RGP)
+
+RGPs are attached to tokens or identity entities and groups. They travel with the token and are evaluated for every request that token makes.
+
+**Use RGPs when you want to:**
+- Restrict a specific user or role to specific IP ranges.
+- Enforce time-based access for a class of service accounts.
+- Apply consistent restrictions to all members of an identity group.
+
+```bash
+# Create an RGP
+vault write sys/policies/rgp/restrict-by-ip \
+  policy="$(base64 restrict-by-ip.sentinel)" \
+  enforcement_level="hard-mandatory"
+
+# Attach an RGP to a token role
+vault write auth/token/roles/restricted \
+  token_policies="default,my-app" \
+  token_bound_cidrs="10.0.0.0/8" \
+  # Sentinel RGPs are attached differently:
+vault write sys/policies/rgp/restrict-by-ip \
+  enforcement_level="advisory"
+```
+
+## Enforcement levels
+
+| Level | Behavior |
+|-------|----------|
+| `advisory` | Policy is evaluated and the result is logged, but access is not denied on failure. |
+| `soft-mandatory` | Policy failure denies access, but can be overridden by a token with the `sentinel-override` policy. |
+| `hard-mandatory` | Policy failure always denies access; cannot be overridden. |
+
+## Sentinel policy language
+
+Sentinel uses its own domain-specific language (DSL) designed for policy evaluation. Policies are Go-like in syntax.
+
+### Basic structure
+
+```python
+# A Sentinel policy file
+import "time"
+import "sockaddr"
+
+# The main rule is evaluated to determine allow/deny
+main = rule { hour_check and ip_check }
+
+# Allow access only between 08:00 and 18:00 UTC on weekdays
+hour_check = rule {
+  time.now.hour >= 8 and
+  time.now.hour < 18 and
+  time.now.weekday > 0 and
+  time.now.weekday < 6
+}
+
+# Restrict to internal network
+ip_check = rule {
+  sockaddr.is_contained(request.connection.remote_addr, "10.0.0.0/8")
+}
+```
+
+### Available imports
+
+Sentinel provides built-in imports for Vault context:
+
+| Import | Description |
+|--------|-------------|
+| `request` | The incoming request (path, operation, data, remote address) |
+| `response` | The response from Vault |
+| `identity` | The entity and group memberships of the requesting token |
+| `token` | Properties of the token making the request |
+| `time` | Current time and date |
+| `sockaddr` | IP address and CIDR matching utilities |
+| `http` | Make external HTTP calls (use carefully) |
+
+## Example policies
+
+### Time-based access restriction
+
+Allow access to production secrets only during business hours (Monday–Friday, 08:00–18:00 UTC):
+
+```python
+import "time"
+
+# Define business hours
+business_hours = rule {
+  time.now.weekday >= 1 and  # Monday
+  time.now.weekday <= 5 and  # Friday
+  time.now.hour >= 8 and     # 08:00
+  time.now.hour < 18         # 18:00
+}
+
+# Emergency break-glass: allow root namespace admin tokens
+is_emergency = rule {
+  token.policies contains "emergency-access"
+}
+
+main = rule { business_hours or is_emergency }
+```
+
+Apply this as an EGP to the production secrets path:
+
+```bash
+vault write sys/policies/egp/prod-business-hours \
+  policy="$(cat business-hours.sentinel | base64)" \
+  enforcement_level="soft-mandatory" \
+  paths="secret/data/prod/*"
+```
+
+### IP restriction policy
+
+Restrict access to secrets to requests originating from a specific CIDR range:
+
+```python
+import "sockaddr"
+
+# Only allow requests from the corporate network
+allowed_cidrs = [
+  "10.0.0.0/8",
+  "192.168.0.0/16",
+]
+
+ip_is_allowed = rule {
+  any allowed_cidrs as cidr {
+    sockaddr.is_contained(request.connection.remote_addr, cidr)
+  }
+}
+
+main = rule { ip_is_allowed }
+```
+
+### Identity-based policy
+
+Grant additional access based on identity group membership:
+
+```python
+import "identity"
+
+# Allow access if the requesting entity belongs to the 'database-admins' group
+in_db_admin_group = rule {
+  identity.groups.names contains "database-admins"
+}
+
+main = rule { in_db_admin_group }
+```
+
+### MFA enforcement policy
+
+Require MFA for all write operations on sensitive paths:
+
+```python
+import "request"
+
+# Only enforce on write operations
+is_write = rule {
+  request.operation in ["create", "update", "delete", "patch"]
+}
+
+# Check that MFA was satisfied
+mfa_satisfied = rule {
+  length(token.mfa_requirement.mfa_request_map) == 0
+}
+
+main = rule { not is_write or mfa_satisfied }
+```
+
+## Managing Sentinel policies
+
+```bash
+# List all EGPs
+vault list sys/policies/egp
+
+# Read an EGP
+vault read sys/policies/egp/business-hours
+
+# Update an EGP
+vault write sys/policies/egp/business-hours \
+  policy="$(base64 updated-policy.sentinel)" \
+  enforcement_level="hard-mandatory" \
+  paths="secret/*"
+
+# Delete an EGP
+vault delete sys/policies/egp/business-hours
+
+# List all RGPs
+vault list sys/policies/rgp
+
+# Delete an RGP
+vault delete sys/policies/rgp/restrict-by-ip
+```
+
+<Tip>
+  Start with `advisory` enforcement level when deploying new Sentinel policies. Monitor policy evaluation results, then promote to `soft-mandatory` and finally `hard-mandatory` once you have confirmed the policy behaves as expected.
+</Tip>

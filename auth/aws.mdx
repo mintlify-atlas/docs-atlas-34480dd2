@@ -1,0 +1,259 @@
+---
+title: "AWS Auth Method"
+description: "The AWS auth method allows AWS entities to authenticate to Vault using their AWS credentials or EC2 instance identity."
+---
+
+The AWS auth method provides two distinct authentication mechanisms:
+
+- **IAM auth**: Uses the AWS IAM `sts:GetCallerIdentity` API call to verify the identity of the caller. Works with IAM users, IAM roles, and any entity that can call STS — including EC2 instances, Lambda functions, ECS tasks, and more.
+- **EC2 auth**: Uses EC2 instance identity documents signed by AWS to authenticate EC2 instances.
+
+<Info>
+  IAM auth is the recommended approach for most use cases as it supports a broader set of AWS entities and does not require the EC2 metadata service.
+</Info>
+
+## Enabling AWS auth
+
+```bash
+vault auth enable aws
+```
+
+## Configuring AWS credentials for Vault
+
+Vault needs AWS credentials to call the AWS APIs needed to verify identities.
+
+```bash
+vault write auth/aws/config/client \
+  access_key="AKIAIOSFODNN7EXAMPLE" \
+  secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+```
+
+<Tip>
+  Instead of static credentials, run Vault on an EC2 instance or ECS task with an IAM role that has the required permissions. Vault will automatically use the instance/task role.
+</Tip>
+
+### Client configuration parameters
+
+<ParamField path="access_key" type="string">
+  AWS Access Key ID for the account used to make AWS API requests. Leave empty to use environment variables or the instance/task IAM role.
+</ParamField>
+
+<ParamField path="secret_key" type="string">
+  AWS Secret Access Key for the account used to make AWS API requests.
+</ParamField>
+
+<ParamField path="endpoint" type="string">
+  URL to override the default generated endpoint for making AWS EC2 API calls.
+</ParamField>
+
+<ParamField path="iam_endpoint" type="string">
+  URL to override the default generated endpoint for making AWS IAM API calls.
+</ParamField>
+
+<ParamField path="sts_endpoint" type="string">
+  URL to override the default generated endpoint for making AWS STS API calls.
+</ParamField>
+
+<ParamField path="sts_region" type="string">
+  The region ID for the `sts_endpoint`, if set.
+</ParamField>
+
+<ParamField path="iam_server_id_header_value" type="string">
+  Value to require in the `X-Vault-AWS-IAM-Server-ID` request header. Prevents replay attacks across Vault clusters.
+</ParamField>
+
+<ParamField path="allowed_sts_header_values" type="string[]">
+  List of additional headers that are allowed to be in AWS STS request headers.
+</ParamField>
+
+<ParamField path="max_retries" type="number">
+  Maximum number of retries for recoverable exceptions of AWS APIs.
+</ParamField>
+
+## Creating roles
+
+### IAM auth role
+
+```bash
+vault write auth/aws/role/my-iam-role \
+  auth_type=iam \
+  bound_iam_principal_arn="arn:aws:iam::123456789012:role/my-app-role" \
+  token_policies="my-app-policy" \
+  token_ttl="1h" \
+  token_max_ttl="4h"
+```
+
+### EC2 auth role
+
+```bash
+vault write auth/aws/role/my-ec2-role \
+  auth_type=ec2 \
+  bound_ami_id="ami-0abcdef1234567890" \
+  bound_account_id="123456789012" \
+  token_policies="ec2-policy" \
+  token_ttl="1h"
+```
+
+### Role parameters
+
+<ParamField path="auth_type" type="string" required>
+  The auth type permitted to authenticate to this role. Must be one of `iam` or `ec2`. Cannot be changed after role creation.
+</ParamField>
+
+<ParamField path="bound_iam_principal_arn" type="string[]">
+  ARN of the IAM principals to bind to this role. Only applicable when `auth_type` is `iam`. Supports wildcards.
+</ParamField>
+
+<ParamField path="bound_ami_id" type="string[]">
+  If set, defines a constraint requiring EC2 instances to use one of the specified AMI IDs. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="bound_account_id" type="string[]">
+  If set, defines a constraint requiring the EC2 instance's account ID to match one of the specified IDs. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="bound_iam_role_arn" type="string[]">
+  If set, defines a constraint requiring the authenticating EC2 instance to match one of the IAM role ARNs. Value is prefix-matched. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="bound_iam_instance_profile_arn" type="string[]">
+  If set, defines a constraint on the EC2 instances to be associated with an IAM instance profile ARN that prefix-matches one of the specified values. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="bound_ec2_instance_id" type="string[]">
+  If set, defines a constraint on the EC2 instances to have one of the specified instance IDs. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="bound_region" type="string[]">
+  If set, defines a constraint requiring the EC2 instance's region to match one of the specified regions. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="bound_vpc_id" type="string[]">
+  If set, defines a constraint requiring the EC2 instance to be associated with a VPC ID that matches one of the specified values. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="bound_subnet_id" type="string[]">
+  If set, defines a constraint requiring the EC2 instance to be associated with the subnet ID that matches one of the specified values. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="resolve_aws_unique_ids" type="boolean" default="true">
+  If set, resolves all AWS IAM ARNs into AWS's internal unique IDs. When an IAM entity is deleted, references to it within the role are invalidated. Once set, this cannot be unset.
+</ParamField>
+
+<ParamField path="role_tag" type="string">
+  If set, enables role tags for this role. The value is the EC2 tag key. Only allowed when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="disallow_reauthentication" type="boolean" default="false">
+  If set, only allows a single token to be granted per instance ID. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="allow_instance_migration" type="boolean" default="false">
+  If set, allows migration of the underlying instance. Disables the client nonce check when the instance is migrated. Use with caution. Only applicable when `auth_type` is `ec2`.
+</ParamField>
+
+<ParamField path="inferred_entity_type" type="string">
+  When `auth_type` is `iam`, the AWS entity type to infer. Only supported value is `ec2_instance`.
+</ParamField>
+
+<ParamField path="inferred_aws_region" type="string">
+  When `auth_type` is `iam` and `inferred_entity_type` is set, the region to assume the inferred entity exists in.
+</ParamField>
+
+### Token parameters
+
+<ParamField path="token_policies" type="string[]">
+  List of Vault policies to assign to the token issued on login.
+</ParamField>
+
+<ParamField path="token_ttl" type="string">
+  The incremental lifetime for generated tokens.
+</ParamField>
+
+<ParamField path="token_max_ttl" type="string">
+  The maximum lifetime for generated tokens.
+</ParamField>
+
+<ParamField path="token_period" type="string">
+  If set, tokens will be periodic with the given period.
+</ParamField>
+
+<ParamField path="token_bound_cidrs" type="string[]">
+  List of CIDR blocks restricting which IPs can use the returned token.
+</ParamField>
+
+## Authenticating
+
+<Tabs>
+  <Tab title="IAM auth">
+    From an EC2 instance, Lambda, or any AWS entity with an IAM role:
+
+    ```bash
+    # Using the Vault CLI (automatically signs the STS request)
+    vault login -method=aws role=my-iam-role
+    ```
+
+    Using the AWS CLI to manually sign the request:
+
+    ```bash
+    # Generate a signed request
+    AWS_REQUEST=$(vault login -method=aws -no-print -output-curl-string role=my-iam-role)
+    ```
+
+    Using the API directly from a Lambda function:
+
+    ```go
+    // The Vault AWS SDK helper handles signing automatically
+    loginData := map[string]interface{}{
+        "role": "my-iam-role",
+    }
+    // Sign and submit using aws-sdk-go
+    ```
+  </Tab>
+  <Tab title="EC2 auth">
+    From an EC2 instance using the instance identity document:
+
+    ```bash
+    # Retrieve PKCS7-encoded instance identity document
+    PKCS7=$(curl -s http://169.254.169.254/latest/dynamic/instance-identity/pkcs7 | tr -d '\n')
+
+    # Login
+    vault write auth/aws/login \
+      role=my-ec2-role \
+      pkcs7="$PKCS7" \
+      nonce="vault-client-nonce-value"
+    ```
+  </Tab>
+</Tabs>
+
+## IAM required permissions
+
+The IAM user or role Vault uses to make AWS API calls needs these permissions:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "iam:GetInstanceProfile",
+        "iam:GetUser",
+        "iam:GetRole",
+        "sts:GetCallerIdentity"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+## Cross-account authentication
+
+To authenticate entities in other AWS accounts, configure STS role assumptions:
+
+```bash
+vault write auth/aws/config/sts/123456789012 \
+  sts_role="arn:aws:iam::123456789012:role/vault-cross-account-role"
+```

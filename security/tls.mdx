@@ -1,0 +1,219 @@
+---
+title: "TLS Configuration"
+description: "Configure TLS encryption for Vault listeners, manage certificates, verify client certificates, and reload TLS configuration without downtime."
+---
+
+All communication with Vault should be encrypted with TLS. Vault supports TLS 1.2 and TLS 1.3, configurable per listener. This page covers TLS listener configuration, environment variables for clients, and certificate rotation.
+
+## Listener TLS configuration
+
+Configure TLS in the `listener` stanza of your Vault configuration file:
+
+```hcl
+listener "tcp" {
+  address         = "0.0.0.0:8200"
+  cluster_address = "0.0.0.0:8201"
+
+  tls_cert_file = "/etc/vault/tls/vault.crt"
+  tls_key_file  = "/etc/vault/tls/vault.key"
+}
+```
+
+### TLS parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `tls_cert_file` | Path to the PEM-encoded TLS certificate file. |
+| `tls_key_file` | Path to the PEM-encoded private key file. |
+| `tls_client_ca_file` | Path to the CA certificate for client certificate verification. |
+| `tls_require_and_verify_client_cert` | If `true`, require and verify client certificates. Default: `false`. |
+| `tls_min_version` | Minimum TLS version: `tls10`, `tls11`, `tls12`, `tls13`. Default: `tls12`. |
+| `tls_max_version` | Maximum TLS version. Default: `tls13`. |
+| `tls_cipher_suites` | Comma-separated list of supported cipher suites (TLS 1.2 only). |
+| `tls_prefer_server_cipher_suites` | Prefer the server's cipher suite order. Default: `false`. |
+| `tls_disable` | Set to `true` to disable TLS entirely. **Never use in production.** |
+
+### Production-recommended configuration
+
+```hcl
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_cert_file = "/etc/vault/tls/vault.crt"
+  tls_key_file  = "/etc/vault/tls/vault.key"
+
+  # Require TLS 1.2 or higher
+  tls_min_version = "tls12"
+
+  # Restrict cipher suites for TLS 1.2
+  tls_cipher_suites = "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256"
+}
+```
+
+### Cluster listener TLS
+
+The cluster listener (default port 8201) handles server-to-server communication. Configure it separately or share the same certificate:
+
+```hcl
+listener "tcp" {
+  address         = "0.0.0.0:8200"
+  cluster_address = "0.0.0.0:8201"
+
+  tls_cert_file         = "/etc/vault/tls/vault.crt"
+  tls_key_file          = "/etc/vault/tls/vault.key"
+  tls_client_ca_file    = "/etc/vault/tls/ca.crt"
+
+  # Require mutual TLS for cluster communication
+  tls_require_and_verify_client_cert = "true"
+}
+```
+
+## Client certificate verification
+
+Vault can require clients to present a valid TLS certificate, enabling mutual TLS (mTLS) authentication:
+
+```hcl
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_cert_file = "/etc/vault/tls/vault.crt"
+  tls_key_file  = "/etc/vault/tls/vault.key"
+
+  # Path to the CA that signed client certificates
+  tls_client_ca_file = "/etc/vault/tls/client-ca.crt"
+
+  # Require and verify client certificates
+  tls_require_and_verify_client_cert = "true"
+}
+```
+
+With client certificate verification enabled, clients must present a certificate signed by the configured CA. Unsigned or self-signed client certificates will be rejected.
+
+## Client environment variables
+
+Vault CLI and SDK clients use environment variables to configure TLS behavior:
+
+| Variable | Description |
+|----------|-------------|
+| `VAULT_ADDR` | Vault server address. Should use `https://`. |
+| `VAULT_CACERT` | Path to a PEM-encoded CA certificate to verify the Vault server's certificate. |
+| `VAULT_CAPATH` | Path to a directory of PEM-encoded CA certificates. |
+| `VAULT_CLIENT_CERT` | Path to the client certificate for mutual TLS. |
+| `VAULT_CLIENT_KEY` | Path to the private key for the client certificate. |
+| `VAULT_SKIP_VERIFY` | Set to `true` to skip TLS certificate verification. **Never use in production.** |
+| `VAULT_TLS_SERVER_NAME` | Expected server name for TLS SNI verification. |
+
+```bash
+export VAULT_ADDR="https://vault.example.com:8200"
+export VAULT_CACERT="/etc/ssl/certs/vault-ca.crt"
+
+# For mutual TLS
+export VAULT_CLIENT_CERT="/etc/vault/client.crt"
+export VAULT_CLIENT_KEY="/etc/vault/client.key"
+
+vault status
+```
+
+<Warning>
+  `VAULT_SKIP_VERIFY=true` disables all TLS certificate validation, making the connection vulnerable to man-in-the-middle attacks. It exists only for development purposes. Never set it in production environments.
+</Warning>
+
+## Using a custom CA certificate
+
+If Vault's certificate is signed by a private CA, distribute the CA certificate to all clients:
+
+<Tabs>
+  <Tab title="CLI">
+    ```bash
+    export VAULT_CACERT=/path/to/ca.pem
+    vault status
+    ```
+  </Tab>
+  <Tab title="API (curl)">
+    ```bash
+    curl --cacert /path/to/ca.pem \
+      https://vault.example.com:8200/v1/sys/health
+    ```
+  </Tab>
+  <Tab title="Go SDK">
+    ```go
+    config := vault.DefaultConfig()
+    config.Address = "https://vault.example.com:8200"
+    err := config.ConfigureTLS(&vault.TLSConfig{
+        CACert: "/path/to/ca.pem",
+    })
+    ```
+  </Tab>
+</Tabs>
+
+## Rotating TLS certificates
+
+Vault supports zero-downtime TLS certificate rotation by reloading its configuration in response to a `SIGHUP` signal.
+
+<Steps>
+  <Step title="Generate a new certificate">
+    Create a new certificate and key pair signed by your CA. Ensure the new certificate is valid (not expired) before proceeding.
+
+    ```bash
+    openssl req -newkey rsa:4096 -nodes \
+      -keyout /etc/vault/tls/vault-new.key \
+      -out /etc/vault/tls/vault-new.csr
+
+    openssl x509 -req \
+      -in /etc/vault/tls/vault-new.csr \
+      -CA /etc/vault/tls/ca.crt \
+      -CAkey /etc/vault/tls/ca.key \
+      -CAcreateserial \
+      -out /etc/vault/tls/vault-new.crt \
+      -days 365
+    ```
+  </Step>
+  <Step title="Replace the certificate files">
+    Replace the existing certificate and key with the new files, keeping the same file paths configured in `config.hcl`:
+
+    ```bash
+    mv /etc/vault/tls/vault-new.crt /etc/vault/tls/vault.crt
+    mv /etc/vault/tls/vault-new.key /etc/vault/tls/vault.key
+    ```
+  </Step>
+  <Step title="Send SIGHUP to Vault">
+    Signal Vault to reload its configuration and pick up the new certificate without restarting:
+
+    ```bash
+    # Using systemd
+    systemctl reload vault
+
+    # Or send SIGHUP directly
+    kill -HUP $(pidof vault)
+    ```
+
+    Vault will reload the TLS certificate and begin using it for new connections. Existing connections continue to use the old certificate until they are renegotiated.
+  </Step>
+  <Step title="Verify the new certificate">
+    Confirm the new certificate is in use:
+
+    ```bash
+    openssl s_client -connect vault.example.com:8200 -showcerts < /dev/null 2>/dev/null \
+      | openssl x509 -noout -text | grep -A2 "Validity"
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  Automate certificate rotation using Vault's PKI secrets engine to issue short-lived certificates. Configure cert-manager (Kubernetes) or a renewal daemon to automatically rotate certificates before expiry.
+</Tip>
+
+## Minimum TLS version
+
+Enforce a minimum TLS version to comply with security policies:
+
+```hcl
+listener "tcp" {
+  address         = "0.0.0.0:8200"
+  tls_cert_file   = "/etc/vault/tls/vault.crt"
+  tls_key_file    = "/etc/vault/tls/vault.key"
+  tls_min_version = "tls12"
+}
+```
+
+<Info>
+  TLS 1.0 and 1.1 are deprecated and should not be used. Set `tls_min_version = "tls12"` as a minimum. For new deployments, `tls13` is preferable where client compatibility allows.
+</Info>

@@ -1,0 +1,314 @@
+---
+title: "sys/plugins"
+description: "List, register, deregister, and reload plugins in the Vault plugin catalog."
+---
+
+The `/sys/plugins/catalog` endpoints manage Vault's plugin catalog. Plugins extend Vault with custom secrets engines, auth methods, and database backends.
+
+## List Plugins
+
+Returns all registered plugins, organized by type.
+
+```
+GET /v1/sys/plugins/catalog
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/plugins/catalog
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+// List all plugins
+resp, err := client.Sys().ListPlugins(&api.ListPluginsInput{
+    Type: api.PluginTypeUnknown, // lists all types
+})
+if err != nil {
+    log.Fatal(err)
+}
+for pluginType, names := range resp.PluginsByType {
+    fmt.Printf("%s: %v\n", pluginType, names)
+}
+
+// List only auth plugins
+resp, err = client.Sys().ListPlugins(&api.ListPluginsInput{
+    Type: api.PluginTypeCredential,
+})
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "data": {
+    "auth": ["approle", "aws", "ldap"],
+    "secret": ["aws", "kv", "pki", "transit"],
+    "database": ["mysql-database-plugin", "postgresql-database-plugin"],
+    "detailed": [
+      {
+        "type": "auth",
+        "name": "approle",
+        "version": "v1.17.0+builtin",
+        "builtin": true,
+        "deprecation_status": ""
+      }
+    ]
+  }
+}
+```
+
+<ResponseField name="data.auth" type="array">List of auth plugin names.</ResponseField>
+<ResponseField name="data.secret" type="array">List of secrets engine plugin names.</ResponseField>
+<ResponseField name="data.database" type="array">List of database plugin names.</ResponseField>
+<ResponseField name="data.detailed" type="array">
+  Detailed plugin information list.
+  <Expandable title="PluginDetails fields">
+    <ResponseField name="type" type="string">Plugin type: `auth`, `secret`, or `database`.</ResponseField>
+    <ResponseField name="name" type="string">Plugin name.</ResponseField>
+    <ResponseField name="version" type="string">Plugin version.</ResponseField>
+    <ResponseField name="builtin" type="boolean">Whether this is a built-in plugin.</ResponseField>
+    <ResponseField name="deprecation_status" type="string">Deprecation status, if any.</ResponseField>
+    <ResponseField name="sha256" type="string">SHA256 checksum of the plugin binary.</ResponseField>
+    <ResponseField name="oci_image" type="string">OCI container image for containerized plugins.</ResponseField>
+    <ResponseField name="runtime" type="string">Plugin runtime name.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Get Plugin
+
+Returns details for a specific registered plugin.
+
+```
+GET /v1/sys/plugins/catalog/<type>/<name>
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/plugins/catalog/secret/my-plugin
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+plugin, err := client.Sys().GetPlugin(&api.GetPluginInput{
+    Name:    "my-plugin",
+    Type:    api.PluginTypeSecrets,
+    Version: "v1.0.0", // optional
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(plugin.Command, plugin.SHA256, plugin.Builtin)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "data": {
+    "name": "my-plugin",
+    "command": "vault-plugin-secrets-my-plugin",
+    "args": [],
+    "sha256": "abc123...",
+    "builtin": false,
+    "version": "v1.0.0"
+  }
+}
+```
+
+<ResponseField name="name" type="string">Plugin name.</ResponseField>
+<ResponseField name="command" type="string">The command to run for this plugin (binary name).</ResponseField>
+<ResponseField name="args" type="array">Arguments to pass to the plugin binary.</ResponseField>
+<ResponseField name="sha256" type="string">Expected SHA256 of the plugin binary.</ResponseField>
+<ResponseField name="builtin" type="boolean">Whether this is a built-in plugin.</ResponseField>
+<ResponseField name="version" type="string">Registered plugin version.</ResponseField>
+<ResponseField name="oci_image" type="string">OCI container image (containerized plugins).</ResponseField>
+<ResponseField name="runtime" type="string">Plugin runtime name (containerized plugins).</ResponseField>
+<ResponseField name="deprecation_status" type="string">Deprecation status.</ResponseField>
+
+---
+
+## Register Plugin
+
+Registers a new plugin in the catalog, or updates an existing registration.
+
+```
+PUT /v1/sys/plugins/catalog/<type>/<name>
+```
+
+### Request Parameters
+
+<ParamField body="sha256" type="string" required>
+  SHA256 hex digest of the plugin binary. Vault verifies the binary against this hash before executing it.
+</ParamField>
+
+<ParamField body="command" type="string" required>
+  The filename of the plugin binary (must be in the `plugin_directory`). Example: `vault-plugin-secrets-my-plugin`.
+</ParamField>
+
+<ParamField body="type" type="string" required>
+  Plugin type: `auth`, `secret`, or `database`.
+</ParamField>
+
+<ParamField body="args" type="array">
+  Arguments to pass to the plugin process at startup.
+</ParamField>
+
+<ParamField body="version" type="string">
+  Semantic version for this plugin registration (e.g., `v1.0.0`).
+</ParamField>
+
+<ParamField body="oci_image" type="string">
+  OCI image to run as a containerized plugin.
+</ParamField>
+
+<ParamField body="runtime" type="string">
+  Vault plugin runtime to use for containerized plugins.
+</ParamField>
+
+<ParamField body="env" type="array">
+  List of `KEY=VALUE` pairs to add to the plugin's environment.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sha256": "d3f19d...",
+    "command": "vault-plugin-secrets-my-plugin"
+  }' \
+  https://vault.example.com/v1/sys/plugins/catalog/secret/my-plugin
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+resp, err := client.Sys().RegisterPluginDetailed(&api.RegisterPluginInput{
+    Name:    "my-plugin",
+    Type:    api.PluginTypeSecrets,
+    Command: "vault-plugin-secrets-my-plugin",
+    SHA256:  "d3f19d...",
+    Version: "v1.0.0",
+})
+if err != nil {
+    log.Fatal(err)
+}
+if len(resp.Warnings) > 0 {
+    fmt.Println("Warnings:", resp.Warnings)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success (or `200` with warnings).
+
+---
+
+## Deregister Plugin
+
+Removes a plugin from the catalog. The plugin can no longer be used to mount new backends, but existing mounts are unaffected until they are reloaded or remounted.
+
+```
+DELETE /v1/sys/plugins/catalog/<type>/<name>
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X DELETE \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  "https://vault.example.com/v1/sys/plugins/catalog/secret/my-plugin?version=v1.0.0"
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().DeregisterPlugin(&api.DeregisterPluginInput{
+    Name:    "my-plugin",
+    Type:    api.PluginTypeSecrets,
+    Version: "v1.0.0",
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+---
+
+## Reload Plugin Backend
+
+Reloads all mounted backends using a specific plugin. Use this after updating a plugin binary.
+
+```
+PUT /v1/sys/plugins/reload/backend
+```
+
+### Request Parameters
+
+<ParamField body="plugin" type="string">
+  Name of the plugin to reload (as registered in the catalog).
+</ParamField>
+
+<ParamField body="mounts" type="array">
+  List of mount paths to reload. If empty, all mounts using the plugin are reloaded.
+</ParamField>
+
+<ParamField body="scope" type="string">
+  Scope of the reload. Set to `"global"` to reload on all cluster nodes. Omit for local-only reload.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plugin": "my-plugin",
+    "scope": "global"
+  }' \
+  https://vault.example.com/v1/sys/plugins/reload/backend
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+// Reload across the cluster
+reloadID, err := client.Sys().ReloadPlugin(&api.ReloadPluginInput{
+    Plugin: "my-plugin",
+    Scope:  "global",
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Reload ID:", reloadID)
+
+// Check reload status
+status, err := client.Sys().ReloadPluginStatus(&api.ReloadPluginStatusInput{
+    ReloadID: reloadID,
+})
+for node, result := range status.Results {
+    fmt.Printf("Node %s: %v\n", node, result.Error)
+}
+```
+  </Tab>
+</Tabs>
+
+For global scope, returns `200` with a `reload_id` in the response body. For local scope, returns `204 No Content`.

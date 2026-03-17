@@ -1,0 +1,237 @@
+---
+title: "Docker"
+description: "Run Vault in a Docker container using the official HashiCorp image."
+---
+
+The official Vault Docker image is based on Alpine Linux (with a UBI variant available for Red Hat environments). The default command starts a dev server: `CMD ["server", "-dev"]`, as defined in the Dockerfile.
+
+## Image details
+
+The image is built from the official Dockerfile with the following structure:
+
+| Path | Purpose |
+|------|---------|
+| `/bin/vault` | The Vault binary |
+| `/vault/config` | Configuration directory (mount your config files here) |
+| `/vault/data` | Data directory for the file storage backend |
+| `/vault/logs` | Audit log directory |
+
+**Exposed port:** `8200/tcp` — the primary API and UI port.
+
+**Volumes declared:** `/vault/logs` and `/vault/file` — Vault's Dockerfile declares these as Docker volumes for persistent state.
+
+**Entrypoint:** `docker-entrypoint.sh` using `dumb-init` as the top-level process to reap zombie processes.
+
+## Run in dev mode
+
+The quickest way to get started:
+
+```bash
+docker run \
+  --rm \
+  --cap-add=IPC_LOCK \
+  -e VAULT_DEV_ROOT_TOKEN_ID=root \
+  -e VAULT_DEV_LISTEN_ADDRESS=0.0.0.0:8200 \
+  -p 8200:8200 \
+  hashicorp/vault:1.22.0-beta1
+```
+
+Then in a separate terminal:
+
+```bash
+export VAULT_ADDR='http://127.0.0.1:8200'
+export VAULT_TOKEN='root'
+vault status
+```
+
+<Warning>
+  Dev mode stores everything in memory. All data is lost when the container stops. Do not use dev mode in production.
+</Warning>
+
+## Environment variables
+
+| Variable | Description |
+|----------|-------------|
+| `VAULT_DEV_ROOT_TOKEN_ID` | Sets the initial root token in dev mode. Corresponds to the `-dev-root-token-id` flag. |
+| `VAULT_DEV_LISTEN_ADDRESS` | Overrides the listen address in dev mode (default: `127.0.0.1:8200`). |
+| `VAULT_ADDR` | Address the Vault CLI and client libraries use to reach the server. |
+| `VAULT_TOKEN` | Token used by the Vault CLI. |
+| `VAULT_LOG_LEVEL` | Log verbosity: `trace`, `debug`, `info`, `warn`, `error`. |
+| `VAULT_LOG_FORMAT` | Log format: `standard` or `json`. |
+| `VAULT_DISABLE_MLOCK` | Set to `true` to disable mlock (required when `IPC_LOCK` is unavailable). |
+| `VAULT_UI` | Set to `true` to enable the web UI. |
+| `VAULT_CLUSTER_ADDR` | Cluster address used for Raft and HA coordination. |
+
+<Info>
+  For production deployments in Docker, add `--cap-add=IPC_LOCK` to allow Vault to use `mlock(2)`, which prevents secrets from being swapped to disk. Without it, you must set `VAULT_DISABLE_MLOCK=true` or `disable_mlock = true` in your config.
+</Info>
+
+## Run in production mode
+
+Mount your configuration into `/vault/config` and your TLS certificates into a suitable path. Vault automatically loads all `.hcl` and `.json` files from `/vault/config`.
+
+```bash
+docker run \
+  --rm \
+  --cap-add=IPC_LOCK \
+  -v /path/to/config:/vault/config:ro \
+  -v /path/to/tls:/vault/tls:ro \
+  -v vault-data:/vault/data \
+  -v vault-logs:/vault/logs \
+  -p 8200:8200 \
+  -p 8201:8201 \
+  hashicorp/vault:1.22.0-beta1 \
+  server -config=/vault/config/config.hcl
+```
+
+## Docker Compose
+
+### Dev mode (single node)
+
+```yaml
+# docker-compose.yml
+services:
+  vault:
+    image: hashicorp/vault:1.22.0-beta1
+    container_name: vault-dev
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: "root"
+      VAULT_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
+    command: server -dev
+```
+
+### Production mode (single node with Raft)
+
+```yaml
+# docker-compose.yml
+services:
+  vault:
+    image: hashicorp/vault:1.22.0-beta1
+    container_name: vault
+    restart: unless-stopped
+    cap_add:
+      - IPC_LOCK
+    ports:
+      - "8200:8200"
+      - "8201:8201"
+    volumes:
+      - ./config:/vault/config:ro
+      - ./tls:/vault/tls:ro
+      - vault_data:/vault/data
+      - vault_logs:/vault/logs
+    environment:
+      VAULT_LOG_LEVEL: info
+      VAULT_LOG_FORMAT: json
+    command: server -config=/vault/config/config.hcl
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8200/v1/sys/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  vault_data:
+  vault_logs:
+```
+
+Create a matching `config/config.hcl`:
+
+```hcl
+ui            = true
+disable_mlock = true
+
+storage "raft" {
+  path    = "/vault/data"
+  node_id = "vault-node-1"
+}
+
+listener "tcp" {
+  address     = "0.0.0.0:8200"
+  tls_disable = true  # use a reverse proxy with TLS in front
+}
+
+api_addr     = "http://vault:8200"
+cluster_addr = "http://vault:8201"
+```
+
+Start it:
+
+```bash
+docker compose up -d
+```
+
+## Volume mounts
+
+| Mount path | Purpose |
+|------------|---------|
+| `/vault/config` | HCL/JSON configuration files. Vault loads all files in this directory on startup. |
+| `/vault/data` | Persistent data for the Raft or file storage backend. Use a named Docker volume or a host bind mount. |
+| `/vault/logs` | Audit log output. Mount a persistent volume to retain logs across container restarts. |
+| `/vault/tls` | (Recommended) TLS certificate and key files. Not a built-in path — reference it in your config. |
+
+## Health check endpoint
+
+Vault exposes a health check endpoint at `/v1/sys/health` that does not require authentication:
+
+```bash
+curl http://localhost:8200/v1/sys/health
+```
+
+```json
+{
+  "initialized": true,
+  "sealed": false,
+  "standby": false,
+  "performance_standby": false,
+  "replication_performance_mode": "disabled",
+  "replication_dr_mode": "disabled",
+  "server_time_utc": 1705312800,
+  "version": "1.22.0-beta1",
+  "cluster_name": "vault-cluster-...",
+  "cluster_id": "..."
+}
+```
+
+HTTP status codes from `/v1/sys/health`:
+
+| Status code | Meaning |
+|-------------|---------|
+| `200` | Initialized, unsealed, and active |
+| `429` | Unsealed and in standby mode |
+| `472` | DR secondary active |
+| `473` | Performance standby |
+| `501` | Not initialized |
+| `503` | Sealed |
+
+## Port reference
+
+| Port | Protocol | Description |
+|------|----------|-------------|
+| `8200` | TCP (HTTPS/HTTP) | API, CLI, and web UI |
+| `8201` | TCP (HTTPS) | Cluster-to-cluster communication (Raft, replication) |
+
+## Initializing and unsealing a containerized Vault
+
+After starting in production mode, initialize and unseal from outside the container:
+
+```bash
+export VAULT_ADDR='http://localhost:8200'
+
+# Initialize
+vault operator init -key-shares=5 -key-threshold=3
+
+# Unseal (repeat three times with different keys)
+vault operator unseal
+vault operator unseal
+vault operator unseal
+```
+
+<Tip>
+  For automated deployments, consider configuring auto-unseal with a cloud KMS (AWS KMS, Azure Key Vault, GCP Cloud KMS) so the container can unseal itself on restart without manual intervention.
+</Tip>

@@ -1,0 +1,186 @@
+---
+title: "Vault CLI Overview"
+description: "Complete reference for the Vault command-line interface, including installation, environment variables, global flags, and output formats."
+---
+
+The Vault CLI provides a human-friendly interface for interacting with a Vault server. It communicates with the Vault API over HTTP/HTTPS and is the primary tool for administrators and operators.
+
+## Installation
+
+The Vault binary is available for all major platforms from the [HashiCorp releases page](https://releases.hashicorp.com/vault/). After downloading, place the binary on your `PATH`.
+
+```bash
+# Verify the installation
+vault version
+```
+
+## Shell Autocomplete
+
+Vault supports shell autocomplete for Bash, Zsh, and Fish. Install it with:
+
+```bash
+vault -autocomplete-install
+```
+
+This modifies your shell profile. Restart your shell or run `exec $SHELL` afterwards.
+
+To uninstall autocomplete:
+
+```bash
+vault -autocomplete-uninstall
+```
+
+## Environment Variables
+
+All environment variables can be overridden by the corresponding CLI flag.
+
+| Variable | Description |
+|---|---|
+| `VAULT_ADDR` | Address of the Vault server. Defaults to `https://127.0.0.1:8200`. |
+| `VAULT_TOKEN` | Vault authentication token. Takes precedence over the token helper. |
+| `VAULT_NAMESPACE` | Namespace for the request. Equivalent to the `-namespace` flag. |
+| `VAULT_CACERT` | Path to a PEM-encoded CA certificate file to verify the Vault server's TLS certificate. |
+| `VAULT_CAPATH` | Path to a directory of PEM-encoded CA certificates to verify the server TLS certificate. |
+| `VAULT_CLIENT_CERT` | Path to a PEM-encoded client certificate for mTLS authentication. |
+| `VAULT_CLIENT_KEY` | Path to a PEM-encoded private key for the client certificate. |
+| `VAULT_SKIP_VERIFY` | Set to `true` to skip TLS certificate verification. **Not recommended for production.** |
+| `VAULT_TLS_SERVER_NAME` | Name to use as the SNI host when connecting via TLS. |
+| `VAULT_MAX_RETRIES` | Maximum number of retries on `5xx` error codes. Defaults to `2`. |
+| `VAULT_RATE_LIMIT` | Rate limit for API calls in the form `rate[:burst]` (operations/second). |
+| `VAULT_FORMAT` | Default output format. One of `table`, `json`, `yaml`. |
+| `VAULT_CLI_NO_COLOR` | Set to any non-empty value to disable colored output. |
+
+## Global Flags
+
+These flags are available on every command:
+
+<ParamField path="-address" type="string">
+  Address of the Vault server. Overrides the `VAULT_ADDR` environment variable. Defaults to `https://127.0.0.1:8200`.
+</ParamField>
+
+<ParamField path="-namespace" type="string">
+  The namespace to use for the operation. Overrides the `VAULT_NAMESPACE` environment variable.
+</ParamField>
+
+<ParamField path="-output-policy" type="bool">
+  Print out the required Vault policy HCL for the command instead of executing it.
+</ParamField>
+
+<ParamField path="-tls-skip-verify" type="bool">
+  Disable TLS certificate verification. Overrides `VAULT_SKIP_VERIFY`. **Do not use in production.**
+</ParamField>
+
+<ParamField path="-ca-cert" type="string">
+  Path to a PEM-encoded CA certificate file. Overrides `VAULT_CACERT`.
+</ParamField>
+
+<ParamField path="-ca-path" type="string">
+  Path to a directory of PEM-encoded CA certificates. Overrides `VAULT_CAPATH`.
+</ParamField>
+
+<ParamField path="-client-cert" type="string">
+  Path to a PEM-encoded client certificate. Overrides `VAULT_CLIENT_CERT`.
+</ParamField>
+
+<ParamField path="-client-key" type="string">
+  Path to the private key for the client certificate. Overrides `VAULT_CLIENT_KEY`.
+</ParamField>
+
+<ParamField path="-tls-server-name" type="string">
+  Name to use as the SNI host when connecting. Overrides `VAULT_TLS_SERVER_NAME`.
+</ParamField>
+
+<ParamField path="-wrap-ttl" type="duration">
+  Wrap the response in a cubbyhole token with the given TTL. The response will be a wrapping token instead of the actual result.
+</ParamField>
+
+<ParamField path="-max-retries" type="int">
+  Maximum number of retries. Defaults to `2` for `5xx` errors.
+</ParamField>
+
+<ParamField path="-output-curl-string" type="bool">
+  Print the equivalent `curl` command instead of executing the request.
+</ParamField>
+
+<ParamField path="-non-interactive" type="bool">
+  Disable prompts and interactive input.
+</ParamField>
+
+## Output Formats
+
+Vault supports multiple output formats controlled by the `-format` flag or the `VAULT_FORMAT` environment variable.
+
+<Tabs>
+  <Tab title="table (default)">
+    Human-readable columnar output. Best for interactive use.
+
+    ```bash
+    vault status -format=table
+    ```
+  </Tab>
+  <Tab title="json">
+    Machine-readable JSON output. Ideal for scripts and automation.
+
+    ```bash
+    vault status -format=json
+    ```
+  </Tab>
+  <Tab title="yaml">
+    YAML output format.
+
+    ```bash
+    vault status -format=yaml
+    ```
+  </Tab>
+</Tabs>
+
+To extract a specific field from the output, use `-field`:
+
+```bash
+# Print only the token value
+vault token create -field=token
+
+# Print only the token ID from a lookup
+vault token lookup -field=id
+```
+
+## CLI Command Reference
+
+<CardGroup cols={2}>
+  <Card title="vault server" href="/cli/server">
+    Start a Vault server in production or development mode.
+  </Card>
+  <Card title="vault status" href="/cli/status">
+    Print seal and HA status of the Vault server.
+  </Card>
+  <Card title="vault login" href="/cli/login">
+    Authenticate to Vault and cache a token locally.
+  </Card>
+  <Card title="vault token" href="/cli/token">
+    Create, lookup, renew, and revoke tokens.
+  </Card>
+  <Card title="vault secrets" href="/cli/secrets">
+    Enable, disable, list, and tune secrets engines.
+  </Card>
+  <Card title="vault auth" href="/cli/auth">
+    Enable, disable, list, and tune auth methods.
+  </Card>
+  <Card title="vault policy" href="/cli/policy">
+    Write, read, list, delete, and format policies.
+  </Card>
+  <Card title="vault kv" href="/cli/kv">
+    Read, write, delete, and manage KV secrets.
+  </Card>
+  <Card title="vault operator" href="/cli/operator">
+    Operate and manage Vault: init, unseal, rekey, raft, and more.
+  </Card>
+  <Card title="vault lease" href="/cli/lease">
+    Lookup, renew, and revoke secret leases.
+  </Card>
+  <Card title="vault plugin" href="/cli/plugin">
+    Register, list, deregister, and reload plugins.
+  </Card>
+  <Card title="vault namespace" href="/cli/namespace">
+    Create, list, delete, and manage namespaces.
+  </Card>
+</CardGroup>

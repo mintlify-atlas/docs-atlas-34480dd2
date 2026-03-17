@@ -1,0 +1,237 @@
+---
+title: "Leases"
+description: "How Vault uses leases to bound the lifetime of dynamic secrets, and how to renew, revoke, and monitor them."
+---
+
+A lease is Vault's mechanism for bounding the lifetime of a secret. When a secret engine generates a dynamic credential (a database password, a cloud IAM key, a PKI certificate), it returns a `logical.Secret` with a TTL. The Expiration Manager (`vault/expiration.go`) registers that secret as a lease and schedules automatic revocation when the TTL expires.
+
+## What a lease is
+
+Every lease is an instance of `leaseEntry` stored in the barrier:
+
+```go
+// From vault/expiration.go
+type leaseEntry struct {
+    LeaseID         string                 `json:"lease_id"`
+    ClientToken     string                 `json:"client_token"`
+    ClientTokenType logical.TokenType      `json:"token_type"`
+    Path            string                 `json:"path"`
+    Data            map[string]interface{} `json:"data"`
+    Secret          *logical.Secret        `json:"secret"`
+    Auth            *logical.Auth          `json:"auth"`
+    IssueTime       time.Time              `json:"issue_time"`
+    ExpireTime      time.Time              `json:"expire_time"`
+    LastRenewalTime time.Time              `json:"last_renewal_time"`
+    LoginRole       string                 `json:"login_role"`
+    Version         int                    `json:"version"`
+    RevokeErr       string                 `json:"revokeErr"`
+}
+```
+
+Leases are indexed two ways within the Expiration Manager's barrier view:
+
+| Prefix | Purpose |
+|---|---|
+| `expire/id/` | Primary index by lease ID |
+| `expire/token/` | Secondary index by client token (enables prefix revocation) |
+
+## Lease ID format
+
+Lease IDs encode the secret engine path and a unique UUID. For example:
+
+```
+database/creds/my-role/a1b2c3d4-e5f6-7890-abcd-ef1234567890
+```
+
+The lease ID is always returned alongside the secret in the API response under the `lease_id` key.
+
+## Default and maximum lease TTL
+
+From `vault/expiration.go`:
+
+```go
+// maxLeaseDuration is the default maximum lease duration
+maxLeaseTTL = 32 * 24 * time.Hour
+
+// defaultLeaseDuration is the default lease duration used when no lease is specified
+defaultLeaseTTL = maxLeaseTTL
+```
+
+Both default and maximum lease TTL are **32 days**. These can be overridden at three levels:
+
+| Level | Configuration |
+|---|---|
+| System-wide | `default_lease_ttl` and `max_lease_ttl` in `vault.hcl` |
+| Mount-level | `vault secrets tune -default-lease-ttl=...` |
+| Role/path-level | TTL parameter in the secret engine role |
+
+The effective TTL for a lease is the minimum of the requested TTL, the mount maximum TTL, and the system maximum TTL.
+
+## Lease lifecycle
+
+```
+              issue_time
+                  │
+                  ▼
+          ┌───────────────┐
+          │   Active      │  ← can be read and renewed
+          └──────┬────────┘
+                 │ renew (resets expire_time)
+                 │ or TTL elapses
+                 ▼
+          ┌───────────────┐
+          │   Expired     │  ← automatic revocation triggered
+          └──────┬────────┘
+                 │ revocation succeeds
+                 ▼
+          ┌───────────────┐
+          │   Revoked     │  ← credential invalidated in backend
+          └───────────────┘
+```
+
+If revocation fails, the lease is retried with exponential backoff up to `maxRevokeAttempts = 6` times with a base interval of `revokeRetryBase = 10 * time.Second`. After all retries are exhausted or an unrecoverable error occurs, the lease is marked **irrevocable** and requires manual intervention.
+
+## Renewing leases
+
+Renewing a lease extends the `expire_time` by the renewal increment (up to the mount or system max TTL).
+
+```bash
+# Renew by lease ID
+vault lease renew database/creds/my-role/a1b2c3d4-...
+
+# Renew with a specific increment
+vault lease renew -increment=1h database/creds/my-role/a1b2c3d4-...
+```
+
+The `default` policy grants every token the ability to renew leases:
+
+```hcl
+# From policy_store.go defaultPolicy
+path "sys/leases/renew" {
+    capabilities = ["update"]
+}
+```
+
+Batch tokens cannot have their leases renewed:
+
+```go
+// From vault/expiration.go
+case le.ClientTokenType == logical.TokenTypeBatch:
+    return false, nil  // not renewable
+```
+
+## Revoking leases
+
+```bash
+# Revoke a specific lease
+vault lease revoke database/creds/my-role/a1b2c3d4-...
+
+# Revoke all leases for a path prefix (hierarchical revocation)
+vault lease revoke -prefix database/creds/my-role/
+
+# Force-revoke irrevocable leases
+vault lease revoke -force database/creds/my-role/a1b2c3d4-...
+```
+
+Revocation calls back into the originating secret engine, which invalidates the actual credential in the backend system (e.g., drops the database user or deactivates the IAM key).
+
+## Lease lookup
+
+```bash
+# Look up lease metadata
+vault lease lookup database/creds/my-role/a1b2c3d4-...
+```
+
+The `default` policy grants this to all tokens:
+
+```hcl
+# From policy_store.go defaultPolicy
+path "sys/leases/lookup" {
+    capabilities = ["update"]
+}
+```
+
+## Hierarchical revocation
+
+Because leases are indexed by the token that created them (`expire/token/`), you can revoke all leases created by a specific token or all leases under a path prefix in a single call. This is the mechanism behind `vault token revoke` — revoking a token also revokes every secret it created.
+
+```bash
+# Revoke all database credentials across all roles
+vault lease revoke -prefix database/
+
+# Revoke all credentials for a specific role
+vault lease revoke -prefix database/creds/my-role/
+```
+
+<Warning>
+  Prefix revocation immediately invalidates all matching credentials in the backend systems. Use with care in production.
+</Warning>
+
+## Dynamic secrets and leases
+
+Dynamic secrets (database credentials, AWS IAM keys, PKI certificates) are the primary consumers of the lease system. The workflow is:
+
+<Steps>
+  <Step title="Request a dynamic credential">
+    ```bash
+    vault read database/creds/my-role
+    ```
+
+    Vault calls the database secret engine, which creates a new database user, and returns the credentials with a lease.
+  </Step>
+  <Step title="Use the credential">
+    The application uses the returned username and password to connect to the database. The lease ID is retained for renewal.
+  </Step>
+  <Step title="Renew before expiry">
+    ```bash
+    vault lease renew database/creds/my-role/<lease-id>
+    ```
+
+    The Expiration Manager resets `expire_time`. The actual database credential is not rotated.
+  </Step>
+  <Step title="Credential expires or is revoked">
+    When the lease expires or is explicitly revoked, Vault calls the database engine's revoke path, which drops the database user. The credential becomes invalid.
+  </Step>
+</Steps>
+
+## Lease events
+
+The Expiration Manager emits events for lease lifecycle transitions:
+
+```go
+// From vault/expiration.go
+leaseEventTypeExpired      = "lease/expired"
+leaseEventTypeRevokeFailed = "lease/revoke_failed"
+leaseEventTypeRevoked      = "lease/revoked"
+leaseEventTypeRenewFailed  = "lease/renew_failed"
+leaseEventTypeRenewed      = "lease/renewed"
+leaseEventTypeIssued       = "lease/issued"
+```
+
+These can be consumed via Vault's event bus for observability and alerting.
+
+## Irrevocable leases
+
+When a lease cannot be revoked after `maxRevokeAttempts = 6` attempts, or when an unrecoverable error occurs, it is marked irrevocable:
+
+```go
+// From vault/expiration.go
+// RevokeErr tracks if a lease has failed revocation in a way that is
+// unlikely to be automatically resolved. The first time this happens,
+// RevokeErr will be set, thus marking this leaseEntry as irrevocable.
+RevokeErr string `json:"revokeErr"`
+```
+
+To inspect and resolve irrevocable leases:
+
+```bash
+# List irrevocable leases (returns up to 10,000)
+vault list sys/leases/lookup/
+
+# Force-revoke an irrevocable lease
+vault lease revoke -force <lease-id>
+```
+
+<Tip>
+  Keep lease counts below `maxLeaseThreshold = 256000`. Exceeding this threshold triggers a log warning. High lease counts can degrade performance and indicate a credential issuance pattern that should be reviewed.
+</Tip>

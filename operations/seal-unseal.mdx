@@ -1,0 +1,238 @@
+---
+title: "Seal and Unseal"
+description: "Understand Vault's sealed state, how to unseal with key shares, seal for maintenance, rekey to rotate unseal keys, and migrate between seal types."
+---
+
+Vault starts in a **sealed** state after every restart. When sealed, Vault holds the encrypted storage data but does not have the root key in memory, making it impossible to decrypt or serve any secrets. Unsealing reconstructs the root key from a quorum of key shares.
+
+## Checking seal status
+
+The `vault status` command shows whether Vault is sealed and how many unseal key shares have been provided:
+
+```bash
+vault status
+```
+
+Example output for a sealed Vault:
+
+```
+Key                Value
+---                -----
+Seal Type          shamir
+Initialized        true
+Sealed             true
+Total Shares       5
+Threshold          3
+Unseal Progress    0/3
+Unseal Nonce       n/a
+Version            1.17.0
+Build Date         2024-01-01T00:00:00Z
+Storage Type       raft
+HA Enabled         true
+```
+
+You can also query the health endpoint directly:
+
+```bash
+curl https://vault.example.com:8200/v1/sys/health
+```
+
+## Unsealing
+
+Unseal Vault by providing the threshold number of key shares. Each call provides one share; after the threshold is met, Vault reconstructs the root key and becomes unsealed.
+
+```bash
+# Prompt for the key (recommended — key is not visible in shell history)
+vault operator unseal
+
+# Provide the key as an argument (visible in shell history — avoid in production)
+vault operator unseal <key>
+```
+
+Run `vault operator unseal` once for each key share until the threshold is reached. You can use different key holders for each invocation:
+
+```bash
+# Key holder 1
+vault operator unseal
+# Key (will be hidden): <key-share-1>
+
+# Key holder 2
+vault operator unseal
+# Key (will be hidden): <key-share-2>
+
+# Key holder 3 — Vault is now unsealed
+vault operator unseal
+# Key (will be hidden): <key-share-3>
+```
+
+### Seal migration flag
+
+When migrating between seal types (e.g., Shamir to Auto Unseal), pass `-migrate` to signal that this unseal key is part of a migration:
+
+```bash
+vault operator unseal -migrate
+```
+
+### Resetting unseal progress
+
+If an incorrect key was entered or you want to abort an in-progress unseal, reset the progress:
+
+```bash
+vault operator unseal -reset
+```
+
+## Sealing
+
+Sealing Vault causes it to discard the in-memory root key. This is a protective action — a sealed Vault cannot respond to any secret operations.
+
+```bash
+vault operator seal
+```
+
+Sealing requires a token with `sudo` capability on `sys/seal`. The root token always has this capability.
+
+<Info>
+  If an unseal operation is in progress when you seal, the unseal process is reset. Users will need to re-enter their key shares after the next unseal attempt.
+</Info>
+
+**When to seal Vault manually:**
+
+- Suspected intrusion or key compromise.
+- Before performing storage maintenance.
+- Decommissioning a node.
+
+## Step-down
+
+If the active node is a leader in an HA cluster and you want to trigger a graceful leader election (e.g., before maintenance), use step-down:
+
+```bash
+vault operator step-down
+```
+
+This causes the current active node to yield leadership. A standby node takes over within seconds. Unlike sealing, the node remains running and can be promoted back to leader.
+
+## Rekeying
+
+Rekeying generates a new set of unseal keys. Use this operation when:
+
+- A key share holder leaves your organization.
+- You want to change the number of shares or the threshold.
+- You want to add or remove PGP encryption on key shares.
+
+Rekeying requires a quorum of existing unseal keys but does not require Vault to be restarted or re-sealed.
+
+<Steps>
+  <Step title="Initialize the rekey operation">
+    Start a rekey by specifying the desired new configuration:
+
+    ```bash
+    vault operator rekey \
+      -init \
+      -key-shares=5 \
+      -key-threshold=3
+    ```
+
+    The response includes a **nonce** you will need for subsequent steps.
+  </Step>
+  <Step title="Provide existing unseal keys">
+    Each key holder provides their current unseal key. Repeat until the threshold is met:
+
+    ```bash
+    vault operator rekey -nonce=<nonce>
+    # Unseal Key (will be hidden): <existing-key>
+    ```
+  </Step>
+  <Step title="Distribute new keys">
+    Once the threshold is reached, new key shares are printed. Distribute them immediately, just as you did during initial setup.
+  </Step>
+</Steps>
+
+### Rekeying with PGP
+
+Encrypt the new unseal keys with PGP during the rekey operation:
+
+```bash
+vault operator rekey \
+  -init \
+  -key-shares=3 \
+  -key-threshold=2 \
+  -pgp-keys="keybase:alice,keybase:bob,keybase:carol" \
+  -backup
+```
+
+The `-backup` flag stores encrypted PGP keys in Vault core in case of emergency. Retrieve or delete the backup later:
+
+```bash
+# Retrieve backed-up keys
+vault operator rekey -backup-retrieve
+
+# Delete the backup
+vault operator rekey -backup-delete
+```
+
+### Rekeying recovery keys
+
+For Auto Unseal deployments, rekey the recovery keys using `-target=recovery`:
+
+```bash
+vault operator rekey -init -target=recovery -key-shares=5 -key-threshold=3
+```
+
+### Cancelling a rekey
+
+Abort an in-progress rekey operation:
+
+```bash
+vault operator rekey -cancel
+```
+
+## Root token generation
+
+If the root token has been lost or revoked, generate a new one using unseal keys:
+
+```bash
+# Initialize root token generation
+vault operator generate-root -init
+
+# Each key holder provides their share
+vault operator generate-root -nonce=<nonce>
+
+# Decode the resulting encoded token with the OTP
+vault operator generate-root -decode=<encoded-token> -otp=<otp>
+```
+
+<Warning>
+  Root tokens bypass all policies and have unrestricted access. Generate a new root token only when necessary and revoke it immediately after completing the required task.
+</Warning>
+
+## Migrating between seal types
+
+Migrating from Shamir keys to Auto Unseal (or vice versa) is a live operation that does not require downtime.
+
+<Steps>
+  <Step title="Update the configuration">
+    Add the new seal stanza to `config.hcl`. Include `disabled = "true"` on the old seal stanza if migrating away from it:
+
+    ```hcl
+    # New seal (e.g., AWS KMS)
+    seal "awskms" {
+      region     = "us-east-1"
+      kms_key_id = "alias/vault-unseal"
+    }
+    ```
+  </Step>
+  <Step title="Restart Vault">
+    Restart the Vault process. It will start in a sealed state.
+  </Step>
+  <Step title="Unseal with migrate flag">
+    Provide the threshold number of existing Shamir keys, each with the `-migrate` flag:
+
+    ```bash
+    vault operator unseal -migrate <key-share-1>
+    vault operator unseal -migrate <key-share-2>
+    vault operator unseal -migrate <key-share-3>
+    ```
+
+    Vault migrates the root key to the new seal mechanism on the next successful unseal.
+  </Step>
+</Steps>

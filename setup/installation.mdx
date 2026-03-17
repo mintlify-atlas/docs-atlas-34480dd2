@@ -1,0 +1,180 @@
+---
+title: "Installation"
+description: "Install Vault on Linux, macOS, or from source."
+---
+
+Vault is distributed as a single static binary. Choose the installation method that fits your environment.
+
+## Install from a package manager
+
+<Tabs>
+  <Tab title="macOS">
+    HashiCorp maintains an official Homebrew tap:
+
+    ```bash
+    brew tap hashicorp/tap
+    brew install hashicorp/tap/vault
+    ```
+
+    To upgrade to a newer version:
+
+    ```bash
+    brew upgrade hashicorp/tap/vault
+    ```
+  </Tab>
+
+  <Tab title="Ubuntu / Debian">
+    ```bash
+    # Add the HashiCorp GPG key
+    wget -O - https://apt.releases.hashicorp.com/gpg | \
+      sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+    # Add the HashiCorp apt repository
+    echo "deb [arch=$(dpkg --print-architecture) \
+      signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+      https://apt.releases.hashicorp.com $(lsb_release -cs) main" | \
+      sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+    sudo apt update && sudo apt install vault
+    ```
+  </Tab>
+
+  <Tab title="RHEL / CentOS / Fedora">
+    ```bash
+    sudo yum install -y yum-utils
+    sudo yum-config-manager \
+      --add-repo https://rpm.releases.hashicorp.com/RHEL/hashicorp.repo
+    sudo yum -y install vault
+    ```
+  </Tab>
+
+  <Tab title="Amazon Linux 2">
+    ```bash
+    sudo yum install -y yum-utils
+    sudo yum-config-manager \
+      --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo
+    sudo yum -y install vault
+    ```
+  </Tab>
+</Tabs>
+
+## Download the binary manually
+
+You can download pre-built binaries directly from HashiCorp releases.
+
+<Steps>
+  <Step title="Download the archive">
+    Replace `1.22.0-beta1` with the version you want. Binaries are available for Linux, macOS, Windows, FreeBSD, and more.
+
+    ```bash
+    export VAULT_VERSION="1.22.0-beta1"
+    curl -fsSL "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_linux_amd64.zip" \
+      -o vault.zip
+    ```
+  </Step>
+
+  <Step title="Verify the checksum">
+    ```bash
+    curl -fsSL "https://releases.hashicorp.com/vault/${VAULT_VERSION}/vault_${VAULT_VERSION}_SHA256SUMS" \
+      -o vault_SHA256SUMS
+    sha256sum --check --ignore-missing vault_SHA256SUMS
+    ```
+  </Step>
+
+  <Step title="Unzip and install">
+    ```bash
+    unzip vault.zip
+    sudo mv vault /usr/local/bin/vault
+    sudo chmod +x /usr/local/bin/vault
+    ```
+  </Step>
+</Steps>
+
+## Build from source
+
+Building from source requires [Go](https://go.dev) and `make`. The repository uses Go Modules, so clone it outside of your GOPATH.
+
+<Steps>
+  <Step title="Install Go and set up the environment">
+    Install Go, then configure `GOPATH` and `GOBIN`:
+
+    ```bash
+    export GOPATH=$HOME/go
+    export GOBIN=$GOPATH/bin
+    export PATH=$PATH:$GOBIN
+    ```
+  </Step>
+
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/hashicorp/vault.git
+    cd vault
+    ```
+
+    <Note>
+      Clone outside of your `GOPATH`. Vault uses Go Modules so the standard `src/` directory structure is not required.
+    </Note>
+  </Step>
+
+  <Step title="Bootstrap the build tools">
+    ```bash
+    make bootstrap
+    ```
+  </Step>
+
+  <Step title="Compile Vault">
+    <CodeGroup>
+
+    ```bash Without UI
+    make dev
+    ```
+
+    ```bash With embedded UI
+    make static-dist dev-ui
+    ```
+
+    </CodeGroup>
+
+    The resulting binary is placed in `bin/vault` and `$GOBIN/vault`.
+  </Step>
+
+  <Step title="Run tests (optional)">
+    ```bash
+    # Run all tests (requires Docker)
+    make test
+
+    # Run tests for a specific package
+    make test TEST=./vault
+    ```
+  </Step>
+</Steps>
+
+## Verify the installation
+
+```bash
+vault version
+```
+
+```
+Vault v1.22.0-beta1
+```
+
+## Enable shell autocompletion
+
+Vault supports tab completion for commands and flags. Install it with:
+
+```bash
+vault -autocomplete-install
+```
+
+Then reload your shell:
+
+```bash
+exec $SHELL
+```
+
+Autocompletion is provided via the `github.com/posener/complete` library. It works with bash, zsh, and fish.
+
+<Info>
+  After installing via a package manager on Linux, Vault may be configured to disallow running `IPC_LOCK` on the host. In production you should grant the binary the ability to use `mlock(2)` by running: `sudo setcap cap_ipc_lock=+ep /usr/bin/vault`
+</Info>

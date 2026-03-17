@@ -1,0 +1,164 @@
+---
+title: "vault policy"
+description: "Write, read, list, delete, and format Vault ACL policies."
+---
+
+## Overview
+
+The `vault policy` command groups subcommands for managing Vault ACL policies. Policies in Vault are written in HCL and define the permissions tokens have when accessing paths.
+
+```
+Usage: vault policy <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `write` | Upload a named policy from a file |
+| `read` | Print the contents of a policy |
+| `list` | List the installed policies |
+| `delete` | Delete a policy by name |
+| `fmt` | Format a local policy file |
+
+---
+
+## vault policy write
+
+Uploads a policy with the given NAME from the contents of a local file PATH or stdin.
+
+```
+Usage: vault policy write [options] NAME PATH
+```
+
+<Note>
+  Policy names are normalized to lowercase. If you provide an uppercase name, Vault will convert it and display a warning.
+</Note>
+
+### Examples
+
+```bash
+# Upload a policy from a file
+vault policy write my-policy /tmp/policy.hcl
+
+# Upload a policy from stdin
+cat my-policy.hcl | vault policy write my-policy -
+
+# Use a heredoc
+vault policy write my-policy - <<EOF
+path "secret/data/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+EOF
+```
+
+### Policy HCL Format
+
+```hcl
+# Allow all operations on secrets under the app path
+path "secret/data/app/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+# Allow reading from a specific path
+path "secret/data/shared" {
+  capabilities = ["read"]
+}
+
+# Deny access to admin paths
+path "auth/token/create-orphan" {
+  capabilities = ["deny"]
+}
+```
+
+---
+
+## vault policy read
+
+Prints the contents and metadata of the Vault policy named NAME.
+
+```
+Usage: vault policy read [options] [NAME]
+```
+
+### Examples
+
+```bash
+# Read the policy named "my-policy"
+vault policy read my-policy
+
+# Output as JSON
+vault policy read -format=json my-policy
+```
+
+---
+
+## vault policy list
+
+Lists the names of the policies installed on the Vault server.
+
+```
+Usage: vault policy list [options]
+```
+
+### Examples
+
+```bash
+vault policy list
+
+# JSON output
+vault policy list -format=json
+```
+
+### Output
+
+The output includes all policy names, including the built-in `default` and `root` policies:
+
+```
+default
+my-policy
+root
+```
+
+---
+
+## vault policy delete
+
+Deletes the policy named NAME. Once the policy is deleted, all tokens associated with the policy are affected immediately.
+
+```
+Usage: vault policy delete [options] NAME
+```
+
+<Warning>
+  It is not possible to delete the `default` or `root` policies. These are built-in policies.
+</Warning>
+
+### Examples
+
+```bash
+vault policy delete my-policy
+```
+
+---
+
+## vault policy fmt
+
+Formats a local HCL policy file to the Vault policy format. The file is written in-place.
+
+```
+Usage: vault policy fmt [options] PATH
+```
+
+### Examples
+
+```bash
+vault policy fmt /tmp/my-policy.hcl
+```
+
+---
+
+## Built-in Policies
+
+| Policy | Description |
+|---|---|
+| `root` | Full access to all paths in Vault. Assigned to the root token only. Cannot be deleted or modified. |
+| `default` | Attached to all non-root tokens by default. Grants access to standard paths like `auth/token/lookup-self` and `sys/leases/renew`. |

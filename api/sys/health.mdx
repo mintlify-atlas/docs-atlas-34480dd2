@@ -1,0 +1,163 @@
+---
+title: "sys/health"
+description: "Check the health status of a Vault node, including initialization, seal status, and replication mode."
+---
+
+The `/sys/health` endpoint returns status information about a Vault node. It is particularly useful for load balancer health checks because it returns different HTTP status codes based on the node's state.
+
+## Get Health Status
+
+```
+GET /v1/sys/health
+```
+
+<Note>
+  This endpoint does not require authentication. The response HTTP status code reflects the node's state — see the status codes table below.
+</Note>
+
+### Query Parameters
+
+<ParamField query="standbyok" type="boolean">
+  If `true`, standby nodes return `200` instead of `429`.
+</ParamField>
+
+<ParamField query="perfstandbyok" type="boolean">
+  If `true`, performance standby nodes return `200` instead of `473`.
+</ParamField>
+
+<ParamField query="activecode" type="integer">
+  Custom HTTP status code to return when the node is active. Default: `200`.
+</ParamField>
+
+<ParamField query="standbycode" type="integer">
+  Custom HTTP status code to return when the node is a standby. Default: `429`.
+</ParamField>
+
+<ParamField query="drsecondarycode" type="integer">
+  Custom HTTP status code for DR secondary nodes. Default: `472`.
+</ParamField>
+
+<ParamField query="performancestandbycode" type="integer">
+  Custom HTTP status code for performance standby nodes. Default: `473`.
+</ParamField>
+
+<ParamField query="sealedcode" type="integer">
+  Custom HTTP status code when sealed. Default: `503`.
+</ParamField>
+
+<ParamField query="uninitcode" type="integer">
+  Custom HTTP status code when uninitialized. Default: `501`.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+# Basic health check
+curl https://vault.example.com/v1/sys/health
+
+# Make standby nodes return 200 (for load balancers that want all nodes)
+curl "https://vault.example.com/v1/sys/health?standbyok=true"
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+health, err := client.Sys().Health()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Initialized: %v, Sealed: %v, Standby: %v\n",
+    health.Initialized, health.Sealed, health.Standby)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "initialized": true,
+  "sealed": false,
+  "standby": false,
+  "performance_standby": false,
+  "replication_performance_mode": "disabled",
+  "replication_dr_mode": "disabled",
+  "server_time_utc": 1706745600,
+  "version": "1.17.0",
+  "cluster_name": "vault-cluster",
+  "cluster_id": "abc123",
+  "enterprise": false,
+  "echo_duration_ms": 1,
+  "clock_skew_ms": 0
+}
+```
+
+<ResponseField name="initialized" type="boolean">
+  Whether Vault has been initialized.
+</ResponseField>
+
+<ResponseField name="sealed" type="boolean">
+  Whether Vault is sealed.
+</ResponseField>
+
+<ResponseField name="standby" type="boolean">
+  Whether this node is a standby (HA configurations).
+</ResponseField>
+
+<ResponseField name="performance_standby" type="boolean">
+  Whether this is a performance standby node (Vault Enterprise).
+</ResponseField>
+
+<ResponseField name="replication_performance_mode" type="string">
+  Performance replication mode: `disabled`, `primary`, or `secondary`.
+</ResponseField>
+
+<ResponseField name="replication_dr_mode" type="string">
+  DR replication mode: `disabled`, `primary`, or `secondary`.
+</ResponseField>
+
+<ResponseField name="server_time_utc" type="integer">
+  Current server time as a Unix timestamp (UTC).
+</ResponseField>
+
+<ResponseField name="version" type="string">
+  Vault version string.
+</ResponseField>
+
+<ResponseField name="cluster_name" type="string">
+  Cluster name, if configured.
+</ResponseField>
+
+<ResponseField name="cluster_id" type="string">
+  Cluster ID, if configured.
+</ResponseField>
+
+<ResponseField name="last_wal" type="integer">
+  Index of the last WAL entry (HA/replication).
+</ResponseField>
+
+<ResponseField name="enterprise" type="boolean">
+  Whether this is a Vault Enterprise binary.
+</ResponseField>
+
+<ResponseField name="echo_duration_ms" type="integer">
+  Round-trip time to storage backend in milliseconds.
+</ResponseField>
+
+<ResponseField name="clock_skew_ms" type="integer">
+  Clock skew between this node and the primary, in milliseconds.
+</ResponseField>
+
+<ResponseField name="ha_connection_healthy" type="boolean">
+  Whether the HA connection to the primary is healthy.
+</ResponseField>
+
+## Status Codes
+
+| Code | Meaning |
+|------|---------|
+| `200` | Node is initialized, unsealed, and active |
+| `429` | Node is a standby (unsealed but not active) |
+| `472` | DR secondary mode (Vault Enterprise) |
+| `473` | Performance standby (Vault Enterprise) |
+| `501` | Not yet initialized |
+| `503` | Sealed |

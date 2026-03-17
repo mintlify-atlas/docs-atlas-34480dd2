@@ -1,0 +1,218 @@
+---
+title: "Backup and Restore"
+description: "Take Raft snapshots to back up Vault's data and restore them to recover from data loss or cluster failure."
+---
+
+Vault's integrated Raft storage supports point-in-time snapshots for backup and disaster recovery. A snapshot captures the complete state of Vault's storage at a given moment and can be used to restore the cluster to that state.
+
+<Note>
+  Raft snapshot commands require Vault to be running with the Raft integrated storage backend. These commands are not applicable when using Consul or other external storage backends.
+</Note>
+
+## Taking a snapshot
+
+The `vault operator raft snapshot save` command saves the current state of the Raft cluster to a local file.
+
+```bash
+vault operator raft snapshot save backup.snap
+```
+
+The snapshot file is created at the path you specify. The command contacts the active (leader) node and streams the snapshot data directly to disk.
+
+```bash
+# Save to a timestamped file
+vault operator raft snapshot save vault-$(date +%Y%m%d-%H%M%S).snap
+```
+
+<Info>
+  The snapshot is taken from the leader node. If you run this command targeting a follower node, the request is automatically forwarded to the leader.
+</Info>
+
+## Inspecting a snapshot
+
+Before restoring, inspect the snapshot to verify its contents:
+
+```bash
+vault operator raft snapshot inspect backup.snap
+```
+
+The output shows:
+- Snapshot size
+- Creation timestamp
+- Vault version that created the snapshot
+- Storage key count and size breakdown by prefix
+
+Example output:
+
+```
+ ID           2-12345-1234567890
+ Size         45 MiB
+ Index        12345
+ Term         2
+ Version      3
+
+ Breakdown by key prefix:
+ Prefix       Count   Size
+ ------       -----   ----
+ core/        1024    12 MiB
+ logical/     8192    32 MiB
+ sys/         512     1 MiB
+```
+
+## Restoring from a snapshot
+
+<Warning>
+  Restoring a snapshot replaces **all** data in the cluster with the snapshot contents. This is a destructive operation. Any data written after the snapshot was taken will be lost.
+</Warning>
+
+```bash
+vault operator raft snapshot restore backup.snap
+```
+
+### Force restore
+
+If the unseal keys or Auto Unseal configuration has changed since the snapshot was taken, you must pass `-force` to bypass the consistency check:
+
+```bash
+vault operator raft snapshot restore -force backup.snap
+```
+
+<Warning>
+  Using `-force` bypasses checks ensuring the Autounseal or Shamir keys are consistent with the snapshot data. Only use this flag if you are certain the keys match.
+</Warning>
+
+## Step-by-step restore procedure
+
+<Steps>
+  <Step title="Stop all Vault nodes">
+    Before restoring, stop all Vault processes in the cluster to prevent conflicting writes:
+
+    ```bash
+    systemctl stop vault
+    ```
+  </Step>
+  <Step title="Clear Raft data on all nodes">
+    Remove the existing Raft data directory on each node. This forces the cluster to reinitialize from the snapshot:
+
+    ```bash
+    # Replace /vault/data with your configured Raft path
+    rm -rf /vault/data/*
+    ```
+  </Step>
+  <Step title="Start one node">
+    Start the Vault process on a single node first:
+
+    ```bash
+    systemctl start vault
+    ```
+  </Step>
+  <Step title="Unseal the node">
+    ```bash
+    vault operator unseal
+    ```
+  </Step>
+  <Step title="Restore the snapshot">
+    With Vault running on the single node, restore the snapshot:
+
+    ```bash
+    vault operator raft snapshot restore backup.snap
+    ```
+
+    Vault restores the snapshot and automatically restarts.
+  </Step>
+  <Step title="Unseal and rejoin remaining nodes">
+    Start and unseal each remaining node. They will rejoin the cluster and receive data from the restored leader:
+
+    ```bash
+    systemctl start vault
+    vault operator unseal
+    ```
+  </Step>
+  <Step title="Verify cluster health">
+    Check that all nodes have rejoined and the data has been restored:
+
+    ```bash
+    vault operator raft list-peers
+    vault status
+    ```
+  </Step>
+</Steps>
+
+## Automated backups with cron
+
+Schedule regular snapshots using cron or a similar scheduler. Store snapshots in a durable location such as S3, GCS, or Azure Blob Storage.
+
+```bash
+# /etc/cron.d/vault-backup
+# Take a snapshot every hour and upload to S3
+0 * * * * vault /usr/local/bin/vault-backup.sh
+```
+
+Example backup script:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+VAULT_ADDR="https://vault.example.com:8200"
+VAULT_TOKEN="$(cat /etc/vault/backup-token)"
+BACKUP_BUCKET="s3://my-vault-backups"
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+FILENAME="vault-${TIMESTAMP}.snap"
+
+export VAULT_ADDR VAULT_TOKEN
+
+# Take the snapshot
+vault operator raft snapshot save "/tmp/${FILENAME}"
+
+# Upload to S3
+aws s3 cp "/tmp/${FILENAME}" "${BACKUP_BUCKET}/${FILENAME}"
+
+# Delete local copy
+rm "/tmp/${FILENAME}"
+
+echo "Backup complete: ${BACKUP_BUCKET}/${FILENAME}"
+```
+
+<Tip>
+  Use a dedicated Vault token with only the `sys/storage/raft/snapshot` read permission for backup operations. Do not use the root token.
+</Tip>
+
+### Minimum policy for backups
+
+```hcl
+path "sys/storage/raft/snapshot" {
+  capabilities = ["read"]
+}
+```
+
+## Testing backups
+
+A backup you have never tested is not a backup. Regularly verify that your snapshots are valid and restorable.
+
+<Steps>
+  <Step title="Download a recent snapshot">
+    Retrieve a snapshot from your backup storage:
+
+    ```bash
+    aws s3 cp s3://my-vault-backups/vault-20240101-120000.snap /tmp/test-restore.snap
+    ```
+  </Step>
+  <Step title="Inspect the snapshot">
+    Confirm the snapshot is not corrupted:
+
+    ```bash
+    vault operator raft snapshot inspect /tmp/test-restore.snap
+    ```
+  </Step>
+  <Step title="Restore to a test cluster">
+    Stand up an isolated test Vault cluster with the same configuration and restore the snapshot to it.
+  </Step>
+  <Step title="Validate data integrity">
+    Log into the test cluster and verify that expected secrets and configurations are present.
+  </Step>
+</Steps>
+
+<Info>
+  Include backup restoration tests in your regular runbook exercises. Many teams test backup restores monthly to maintain confidence in recovery procedures.
+</Info>

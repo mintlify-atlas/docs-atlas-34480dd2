@@ -1,0 +1,283 @@
+---
+title: "sys/auth"
+description: "List, enable, disable, and tune authentication methods."
+---
+
+The `/sys/auth` endpoints manage Vault's authentication methods.
+
+## List Auth Methods
+
+Returns all enabled authentication methods.
+
+```
+GET /v1/sys/auth
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/auth
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+mounts, err := client.Sys().ListAuth()
+if err != nil {
+    log.Fatal(err)
+}
+for path, mount := range mounts {
+    fmt.Printf("%s => %s\n", path, mount.Type)
+}
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+Returns a map of path to `AuthMount` objects.
+
+```json
+{
+  "token/": {
+    "type": "token",
+    "description": "token based credentials",
+    "accessor": "auth_token_abc123",
+    "uuid": "...",
+    "config": {
+      "default_lease_ttl": 0,
+      "max_lease_ttl": 0,
+      "force_no_cache": false
+    },
+    "local": false,
+    "seal_wrap": false
+  }
+}
+```
+
+---
+
+## Get Auth Method
+
+Returns configuration details for a specific auth method at a given path.
+
+```
+GET /v1/sys/mounts/auth/<path>
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/mounts/auth/approle
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+mount, err := client.Sys().GetAuth("approle")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(mount.Type, mount.Description)
+```
+  </Tab>
+</Tabs>
+
+---
+
+## Enable Auth Method
+
+Enables a new authentication method at the given path.
+
+```
+POST /v1/sys/auth/<path>
+```
+
+### Request Parameters
+
+<ParamField body="type" type="string" required>
+  The type of auth method to enable (e.g., `approle`, `userpass`, `ldap`, `aws`, `kubernetes`).
+</ParamField>
+
+<ParamField body="description" type="string">
+  Human-readable description of this auth method.
+</ParamField>
+
+<ParamField body="local" type="boolean">
+  If `true`, the auth method is local-only; it will not be replicated to DR or performance secondaries.
+</ParamField>
+
+<ParamField body="seal_wrap" type="boolean">
+  If `true`, seal wrapping is enabled for secrets managed by this auth method.
+</ParamField>
+
+<ParamField body="external_entropy_access" type="boolean">
+  Whether to give this backend access to Vault's external entropy source.
+</ParamField>
+
+<ParamField body="config" type="object">
+  Mount configuration object.
+  <Expandable title="properties">
+    <ParamField body="default_lease_ttl" type="string">
+      Default lease TTL. Uses system default if not set.
+    </ParamField>
+    <ParamField body="max_lease_ttl" type="string">
+      Maximum lease TTL.
+    </ParamField>
+    <ParamField body="listing_visibility" type="string">
+      Controls whether this mount shows up in `sys/internal/ui/mounts`. Set to `unauth` to allow unauthenticated access to the mount listing.
+    </ParamField>
+    <ParamField body="token_type" type="string">
+      Default token type (`default`, `batch`, `service`).
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X POST \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "approle",
+    "description": "AppRole authentication"
+  }' \
+  https://vault.example.com/v1/sys/auth/approle
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().EnableAuthWithOptions("approle", &api.MountInput{
+    Type:        "approle",
+    Description: "AppRole authentication",
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Disable Auth Method
+
+Disables the auth method at the given path. All secrets issued via this auth method are immediately revoked.
+
+```
+DELETE /v1/sys/auth/<path>
+```
+
+<Warning>
+  Disabling an auth method will revoke all tokens created by it. Ensure all running workloads using this auth method have migrated before disabling.
+</Warning>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X DELETE \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/auth/approle
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().DisableAuth("approle")
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Tune Auth Method
+
+### Read Tune Configuration
+
+```
+GET /v1/sys/auth/<path>/tune
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/auth/approle/tune
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+config, err := client.Sys().MountConfig("auth/approle")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Default TTL:", config.DefaultLeaseTTL)
+```
+  </Tab>
+</Tabs>
+
+### Update Tune Configuration
+
+```
+POST /v1/sys/auth/<path>/tune
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X POST \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"default_lease_ttl": "1h", "max_lease_ttl": "24h"}' \
+  https://vault.example.com/v1/sys/auth/approle/tune
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+defaultTTL := "1h"
+maxTTL := "24h"
+err := client.Sys().TuneMountAllowNil("auth/approle", api.TuneMountConfigInput{
+    DefaultLeaseTTL: &defaultTTL,
+    MaxLeaseTTL:     &maxTTL,
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+### Tune Response Fields
+
+<ResponseField name="default_lease_ttl" type="integer">
+  Default lease TTL in seconds.
+</ResponseField>
+
+<ResponseField name="max_lease_ttl" type="integer">
+  Maximum lease TTL in seconds.
+</ResponseField>
+
+<ResponseField name="force_no_cache" type="boolean">
+  If `true`, the auth method's leases do not cache.
+</ResponseField>
+
+<ResponseField name="token_type" type="string">
+  Default token type for this mount.
+</ResponseField>
+
+<ResponseField name="listing_visibility" type="string">
+  Whether the mount is visible in unauthenticated listings.
+</ResponseField>

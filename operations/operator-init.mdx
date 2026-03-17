@@ -1,0 +1,189 @@
+---
+title: "Vault Initialization"
+description: "Initialize a new Vault cluster, generate unseal keys and the initial root token, and securely distribute key shares."
+---
+
+Initialization is a one-time operation performed on a brand-new Vault cluster. It prepares the storage backend to receive data, generates the root key, splits it into unseal key shares, and produces the initial root token.
+
+<Warning>
+  Initialization can only be performed once per cluster. If you lose all unseal keys and the root token, the data in Vault is permanently inaccessible.
+</Warning>
+
+## What initialization does
+
+When you run `vault operator init`, Vault:
+
+1. Generates an in-memory **root key** (previously called the master key).
+2. Applies **Shamir's Secret Sharing** to split the root key into `N` key shares.
+3. Encrypts the storage backend with a key derived from the root key.
+4. Returns the key shares (unseal keys) and an **initial root token**.
+5. Discards the in-memory root key — it is never stored anywhere.
+
+The root key is only reconstructed temporarily during unseal operations. Vault never persists it to disk.
+
+## Basic initialization
+
+```bash
+vault operator init
+```
+
+With default settings (5 key shares, threshold of 3), this produces:
+
+```
+Unseal Key 1: <base64-encoded-key-1>
+Unseal Key 2: <base64-encoded-key-2>
+Unseal Key 3: <base64-encoded-key-3>
+Unseal Key 4: <base64-encoded-key-4>
+Unseal Key 5: <base64-encoded-key-5>
+
+Initial Root Token: hvs.XXXXXXXXXXXXXXXXXXXXXXXXXX
+
+Vault initialized with 5 key shares and a key threshold of 3. Please
+securely distribute the key shares printed above. When the Vault is
+re-sealed, restarted, or stopped, you must supply at least 3 of these
+keys to unseal it before it can start servicing requests.
+```
+
+## Key shares and threshold
+
+Shamir's Secret Sharing divides the root key into `N` shares where any `T` shares can reconstruct it. This implements an M-of-N scheme for unsealing.
+
+| Flag | Alias | Default | Description |
+|------|-------|---------|-------------|
+| `-key-shares` | `-n` | `5` | Total number of key shares to generate |
+| `-key-threshold` | `-t` | `3` | Minimum shares required to reconstruct the root key |
+
+```bash
+# Create a 3-of-5 scheme (default)
+vault operator init -key-shares=5 -key-threshold=3
+
+# Create a stricter 4-of-7 scheme
+vault operator init -key-shares=7 -key-threshold=4
+
+# Single-node development (not recommended for production)
+vault operator init -key-shares=1 -key-threshold=1
+```
+
+<Info>
+  The threshold must be less than or equal to the number of shares. A 1-of-1 configuration means a single person holds full access — avoid this in production environments.
+</Info>
+
+## PGP encryption of key shares
+
+By default, key shares are printed in plaintext. For production use, encrypt each share with the recipient's PGP public key so only the intended holder can decrypt it.
+
+```bash
+# Encrypt with PGP key files
+vault operator init \
+  -key-shares=3 \
+  -key-threshold=2 \
+  -pgp-keys="alice.asc,bob.asc,carol.asc"
+
+# Encrypt using Keybase usernames
+vault operator init \
+  -key-shares=3 \
+  -key-threshold=2 \
+  -pgp-keys="keybase:alice,keybase:bob,keybase:carol"
+
+# Encrypt the root token with a PGP key
+vault operator init \
+  -root-token-pgp-key="keybase:ops-team"
+```
+
+**PGP key format:**
+- Path to a binary or base64-encoded PGP public key file on disk.
+- Keybase username in the format `keybase:<username>`.
+- The number of PGP keys must match `-key-shares`.
+
+Each recipient receives a base64-encoded, PGP-encrypted unseal key. They decrypt it with their private key:
+
+```bash
+echo "<base64-encrypted-key>" | base64 -d | gpg --decrypt
+```
+
+## JSON output for automation
+
+Use `-format=json` to receive structured output suitable for automation scripts or infrastructure-as-code pipelines:
+
+```bash
+vault operator init -format=json > /tmp/vault-init.json
+```
+
+The JSON output contains:
+
+```json
+{
+  "unseal_keys_b64": [
+    "<key-1-base64>",
+    "<key-2-base64>",
+    "<key-3-base64>",
+    "<key-4-base64>",
+    "<key-5-base64>"
+  ],
+  "unseal_keys_hex": [
+    "<key-1-hex>",
+    "..."
+  ],
+  "unseal_shares": 5,
+  "unseal_threshold": 3,
+  "recovery_keys_b64": [],
+  "recovery_keys_hex": [],
+  "recovery_keys_shares": 5,
+  "recovery_keys_threshold": 3,
+  "root_token": "hvs.XXXXXXXXXXXXXXXXXXXXXXXXXX"
+}
+```
+
+<Warning>
+  Treat `vault-init.json` as a highly sensitive secret. Delete it or move it to secure storage immediately after saving unseal keys. Never commit it to source control.
+</Warning>
+
+## Auto-unseal and recovery keys
+
+When using Auto Unseal (AWS KMS, Azure Key Vault, GCP CKMS, HSM, etc.), Vault does not require Shamir unseal keys for normal operations. Instead, it generates **recovery keys** that are used for emergency operations such as generating a root token or rekeying.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-recovery-shares` | `5` | Number of recovery key shares to generate |
+| `-recovery-threshold` | `3` | Minimum recovery shares needed |
+| `-recovery-pgp-keys` | — | PGP keys to encrypt recovery shares |
+
+```bash
+vault operator init \
+  -recovery-shares=5 \
+  -recovery-threshold=3 \
+  -recovery-pgp-keys="keybase:alice,keybase:bob,keybase:carol,keybase:dave,keybase:eve"
+```
+
+## Checking initialization status
+
+```bash
+# Check if Vault is initialized
+vault operator init -status
+```
+
+Exit codes:
+- `0` — Vault is already initialized.
+- `1` — An error occurred.
+- `2` — Vault is not yet initialized.
+
+## Securely storing unseal keys
+
+<Steps>
+  <Step title="Distribute keys immediately">
+    As soon as initialization completes, distribute each unseal key to its intended holder over a secure channel. Never send all keys to one person.
+  </Step>
+  <Step title="Store keys in separate locations">
+    Keep each key share in a different physical or logical location: hardware security modules, encrypted password managers, safety deposit boxes, or sealed envelopes held by different people.
+  </Step>
+  <Step title="Test unsealing with the keys">
+    Before considering initialization complete, verify that you can unseal Vault by providing the threshold number of keys.
+  </Step>
+  <Step title="Document the recovery process">
+    Document (securely) who holds each key share and the procedure for gathering keys in an emergency. Store this documentation separately from the keys.
+  </Step>
+</Steps>
+
+<Tip>
+  For automated deployments, consider using Vault's Auto Unseal with cloud KMS. This eliminates the need to manage Shamir unseal keys while still supporting recovery keys for emergency access.
+</Tip>

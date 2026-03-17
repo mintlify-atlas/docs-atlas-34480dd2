@@ -1,0 +1,213 @@
+---
+title: "sys/leases"
+description: "Look up, renew, revoke, and force-revoke leases in Vault."
+---
+
+Leases are Vault's mechanism for time-limited secrets. Every dynamic secret and token has a lease. The `/sys/leases` endpoints allow you to manage these leases.
+
+## Look Up Lease
+
+Returns information about a specific lease.
+
+```
+PUT /v1/sys/leases/lookup
+```
+
+### Request Parameters
+
+<ParamField body="lease_id" type="string" required>
+  The lease ID to look up.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"lease_id": "aws/creds/my-role/abc123"}' \
+  https://vault.example.com/v1/sys/leases/lookup
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+secret, err := client.Sys().Lookup("aws/creds/my-role/abc123")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(secret.Data)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "data": {
+    "id": "aws/creds/my-role/abc123",
+    "issue_time": "2024-01-01T00:00:00Z",
+    "expire_time": "2024-01-01T01:00:00Z",
+    "last_renewal": null,
+    "renewable": true,
+    "ttl": 3600
+  }
+}
+```
+
+---
+
+## Renew Lease
+
+Renews a lease, extending its TTL.
+
+```
+PUT /v1/sys/leases/renew
+```
+
+### Request Parameters
+
+<ParamField body="lease_id" type="string" required>
+  The lease ID to renew.
+</ParamField>
+
+<ParamField body="increment" type="integer">
+  Requested amount of time (in seconds) to extend the lease. The actual increment is capped by the mount's `max_lease_ttl`.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "lease_id": "aws/creds/my-role/abc123",
+    "increment": 3600
+  }' \
+  https://vault.example.com/v1/sys/leases/renew
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+secret, err := client.Sys().Renew("aws/creds/my-role/abc123", 3600)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("New TTL:", secret.LeaseDuration)
+```
+  </Tab>
+</Tabs>
+
+---
+
+## Revoke Lease
+
+Revokes a specific lease and all associated secrets immediately.
+
+```
+PUT /v1/sys/leases/revoke
+```
+
+### Request Parameters
+
+<ParamField body="lease_id" type="string" required>
+  The lease ID to revoke.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"lease_id": "aws/creds/my-role/abc123"}' \
+  https://vault.example.com/v1/sys/leases/revoke
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().Revoke("aws/creds/my-role/abc123")
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Revoke by Prefix
+
+Revokes all leases that start with the specified prefix. Useful for revoking all credentials issued by a particular role or secrets engine path.
+
+```
+PUT /v1/sys/leases/revoke-prefix/<prefix>
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/leases/revoke-prefix/aws/creds/my-role
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().RevokePrefix("aws/creds/my-role")
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Force Revoke by Prefix
+
+Force-revokes all leases under a prefix. Unlike `revoke-prefix`, this ignores errors when revoking individual secrets at their backends, which is useful when a backend is unavailable.
+
+```
+PUT /v1/sys/leases/revoke-force/<prefix>
+```
+
+<Warning>
+  Force revocation removes the lease from Vault's tracking but does NOT guarantee the underlying credentials were revoked at the backend. Use only when the backend is known to be unavailable.
+</Warning>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/leases/revoke-force/aws/creds/my-role
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().RevokeForce("aws/creds/my-role")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Or use RevokeWithOptions for finer control:
+err = client.Sys().RevokeWithOptions(&api.RevokeOptions{
+    LeaseID: "aws/creds/my-role/abc123",
+    Force:   true,
+})
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.

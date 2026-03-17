@@ -1,0 +1,190 @@
+---
+title: "Username/Password Auth Method"
+description: "The userpass auth method allows users to authenticate with Vault using a simple username and password."
+---
+
+The userpass auth method allows users to authenticate with Vault using a username and password stored directly in Vault. It is simple to set up and is useful for development, testing, and human operator access.
+
+<Note>
+  Credentials are stored in Vault using bcrypt hashing for passwords. Vault never stores the plaintext password.
+</Note>
+
+## Enabling userpass auth
+
+```bash
+vault auth enable userpass
+```
+
+## Managing users
+
+### Creating a user
+
+```bash
+vault write auth/userpass/users/mitchellh \
+  password="supersecret" \
+  token_policies="admins" \
+  token_ttl="1h" \
+  token_max_ttl="24h"
+```
+
+### Updating a user password
+
+```bash
+vault write auth/userpass/users/mitchellh/password \
+  password="new-password"
+```
+
+### Updating user policies
+
+```bash
+vault write auth/userpass/users/mitchellh/policies \
+  token_policies="new-policy,read-only"
+```
+
+### Reading a user
+
+```bash
+vault read auth/userpass/users/mitchellh
+```
+
+### Listing all users
+
+```bash
+vault list auth/userpass/users
+```
+
+### Deleting a user
+
+```bash
+vault delete auth/userpass/users/mitchellh
+```
+
+## User parameters
+
+The following parameters can be set when creating or updating a user at `auth/userpass/users/<username>`.
+
+<ParamField path="username" type="string" required>
+  Username for the user. This is case-insensitive and stored lowercased.
+</ParamField>
+
+<ParamField path="password" type="string">
+  Password for this user. Required on create. Stored as a bcrypt hash.
+</ParamField>
+
+<ParamField path="password_hash" type="string">
+  Pre-hashed password in bcrypt format. Cannot be supplied together with `password`.
+</ParamField>
+
+<ParamField path="token_policies" type="string[]">
+  List of Vault policies to assign to the token issued on login.
+</ParamField>
+
+<ParamField path="token_ttl" type="string">
+  The incremental lifetime for generated tokens. If 0 or not set, the system default is used.
+</ParamField>
+
+<ParamField path="token_max_ttl" type="string">
+  The maximum lifetime for generated tokens. If 0 or not set, the system default is used.
+</ParamField>
+
+<ParamField path="token_bound_cidrs" type="string[]">
+  List of CIDR blocks. If set, specifies blocks of IP addresses which can authenticate and use the resulting token.
+</ParamField>
+
+<ParamField path="token_explicit_max_ttl" type="string">
+  Provides a hard cap on the lifetime of the token, even through renewals.
+</ParamField>
+
+<ParamField path="token_no_default_policy" type="boolean" default="false">
+  If true, the default policy will not be set on generated tokens.
+</ParamField>
+
+<ParamField path="token_num_uses" type="number" default="0">
+  Maximum number of times a generated token may be used. 0 means unlimited.
+</ParamField>
+
+<ParamField path="token_period" type="string">
+  If set, tokens will be periodic with the given period.
+</ParamField>
+
+<ParamField path="token_type" type="string" default="default">
+  The type of token to generate: `service`, `batch`, or `default`.
+</ParamField>
+
+## Logging in
+
+```bash
+vault login -method=userpass username=mitchellh password=foo
+```
+
+Or using environment variables:
+
+```bash
+export VAULT_AUTH_USERPASS_PASSWORD=foo
+vault login -method=userpass username=mitchellh
+```
+
+Using the API directly:
+
+```bash
+curl \
+  --request POST \
+  --data '{"password": "foo"}' \
+  http://127.0.0.1:8200/v1/auth/userpass/login/mitchellh
+```
+
+## Using a pre-hashed password
+
+If you need to create a user with a pre-computed bcrypt hash (e.g., from a configuration management system):
+
+```bash
+# Generate a bcrypt hash
+BCRYPT_HASH=$(htpasswd -bnBC 10 "" "my-password" | tr -d ':\n' | sed 's/$2y/$2a/')
+
+# Create the user with the hash
+vault write auth/userpass/users/myuser \
+  password_hash="$BCRYPT_HASH" \
+  token_policies="my-policy"
+```
+
+<Warning>
+  You cannot supply both `password` and `password_hash` in the same request. They are mutually exclusive.
+</Warning>
+
+## Example: Full setup
+
+<Steps>
+  <Step title="Enable the auth method">
+    ```bash
+    vault auth enable userpass
+    ```
+  </Step>
+  <Step title="Create users with policies">
+    ```bash
+    vault write auth/userpass/users/alice \
+      password="alice-secret" \
+      token_policies="developer" \
+      token_ttl="8h"
+
+    vault write auth/userpass/users/bob \
+      password="bob-secret" \
+      token_policies="operator" \
+      token_ttl="1h"
+    ```
+  </Step>
+  <Step title="Log in">
+    ```bash
+    vault login -method=userpass username=alice password=alice-secret
+    ```
+  </Step>
+  <Step title="Update a password">
+    ```bash
+    vault write auth/userpass/users/alice/password \
+      password="new-alice-secret"
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  For production human operator access, consider using a federated identity provider (LDAP, Okta, GitHub) so that Vault inherits your existing access controls and password policies.
+</Tip>

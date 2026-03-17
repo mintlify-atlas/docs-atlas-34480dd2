@@ -1,0 +1,322 @@
+---
+title: "Policies"
+description: "How ACL policies control access to Vault paths using capabilities, wildcards, and parameter constraints."
+---
+
+Policies are the access control mechanism in Vault. A policy is a named HCL (or JSON) document that maps path patterns to sets of capabilities. When a request arrives, Vault resolves the set of policies attached to the caller's token, evaluates all matching path rules, and permits or denies the operation.
+
+## Policy types
+
+Vault defines three policy types in `vault/policy.go`:
+
+```go
+// From vault/policy.go
+const (
+    PolicyTypeACL   PolicyType = iota  // standard ACL policy
+    PolicyTypeRGP                      // Role Governing Policy (Sentinel, enterprise)
+    PolicyTypeEGP                      // Endpoint Governing Policy (Sentinel, enterprise)
+    PolicyTypeToken                    // looks up actual type from store
+)
+```
+
+This page covers ACL policies. RGP and EGP are enterprise-only Sentinel-based policies.
+
+## Capabilities
+
+Every path rule grants one or more capabilities. The full set is defined as constants:
+
+```go
+// From vault/policy.go
+DenyCapability      = "deny"
+CreateCapability    = "create"
+ReadCapability      = "read"
+UpdateCapability    = "update"
+DeleteCapability    = "delete"
+ListCapability      = "list"
+SudoCapability      = "sudo"
+PatchCapability     = "patch"
+SubscribeCapability = "subscribe"
+RecoverCapability   = "recover"
+```
+
+<Info>
+  Capabilities are stored internally as a bitmask (`CapabilitiesBitmap uint32` in `ACLPermissions`). For example, `DenyCapabilityInt = 1 << 0`, `CreateCapabilityInt = 1 << 1`, `ReadCapabilityInt = 1 << 2`, and so on.
+</Info>
+
+### Capability reference
+
+| Capability | HTTP method equivalent | Description |
+|---|---|---|
+| `create` | POST/PUT | Create a new secret or resource |
+| `read` | GET | Read an existing secret or resource |
+| `update` | POST/PUT | Update an existing secret or resource |
+| `delete` | DELETE | Delete a secret or resource |
+| `list` | LIST | List keys at a path |
+| `patch` | PATCH | Partial update |
+| `sudo` | — | Bypasses mount-level protections; required for root-protected paths |
+| `deny` | — | Explicitly denies access, overrides all other capabilities |
+| `subscribe` | — | Subscribe to event notifications |
+| `recover` | — | Recover a deleted secret (KV v2) |
+
+When `deny` is present, it takes exclusive effect — all other capabilities in the same path block are ignored:
+
+```go
+// From vault/policy.go
+case DenyCapability:
+    pc.Capabilities = []string{DenyCapability}
+    pc.Permissions.CapabilitiesBitmap = DenyCapabilityInt
+    goto PathFinished
+```
+
+## HCL policy syntax
+
+```hcl
+# Grant read access to a specific secret path
+path "secret/data/myapp/config" {
+  capabilities = ["read"]
+}
+
+# Grant CRUD on all secrets under a prefix
+path "secret/data/myapp/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+# Allow listing keys (not reading values)
+path "secret/metadata/myapp/*" {
+  capabilities = ["list"]
+}
+
+# Allow managing a PKI role
+path "pki/roles/web" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+```
+
+## Path globbing
+
+Policies support two types of path matching:
+
+### Trailing glob (`*`)
+
+A `*` at the end of a path matches any suffix:
+
+```hcl
+path "secret/data/team/*" {
+  capabilities = ["read"]
+}
+```
+
+When a trailing `*` is detected, the `PathRules.IsPrefix` flag is set to `true` and the asterisk is stripped:
+
+```go
+// From vault/policy.go
+if strings.HasSuffix(pc.Path, "*") {
+    if !pc.HasSegmentWildcards {
+        pc.Path = strings.TrimSuffix(pc.Path, "*")
+        pc.IsPrefix = true
+    }
+}
+```
+
+### Segment wildcard (`+`)
+
+A `+` matches exactly one path segment (no slashes):
+
+```hcl
+# Match any identity entity by ID
+path "identity/entity/id/+" {
+  capabilities = ["read"]
+}
+
+# Match any secret under any team namespace
+path "secret/data/+/config" {
+  capabilities = ["read"]
+}
+```
+
+Segment wildcards set `PathRules.HasSegmentWildcards = true`. The combination `+*` is explicitly forbidden:
+
+```go
+// From vault/policy.go
+if strings.Contains(pc.Path, "+*") {
+    return fmt.Errorf("path %q: invalid use of wildcards ('+*' is forbidden)", pc.Path)
+}
+```
+
+## Parameter constraints
+
+Path rules can restrict which request parameters are allowed or denied:
+
+```hcl
+path "aws/creds/deploy" {
+  capabilities = ["update"]
+
+  # Only allow the ttl parameter, and only specific values
+  allowed_parameters = {
+    "ttl" = ["1h", "2h", "4h"]
+  }
+
+  # Forbid setting the region parameter
+  denied_parameters = {
+    "region" = []
+  }
+
+  # Require that role_name is always present
+  required_parameters = ["role_name"]
+}
+```
+
+These map to `ACLPermissions` fields:
+
+```go
+// From vault/policy.go
+type ACLPermissions struct {
+    CapabilitiesBitmap uint32
+    MinWrappingTTL     time.Duration
+    MaxWrappingTTL     time.Duration
+    AllowedParameters  map[string][]interface{}
+    DeniedParameters   map[string][]interface{}
+    RequiredParameters []string
+    MFAMethods         []string
+    ControlGroup       *ControlGroup
+    // ...
+}
+```
+
+## Wrapping TTL constraints
+
+Policies can enforce that responses are wrapped within a TTL range:
+
+```hcl
+path "secret/data/sensitive" {
+  capabilities = ["read"]
+  min_wrapping_ttl = "1s"
+  max_wrapping_ttl = "90s"
+}
+```
+
+## Policy evaluation
+
+When a request arrives, Vault:
+
+1. Collects all policies attached to the token (including identity entity and group policies).
+2. For each policy, finds all path rules that match the request path. Both prefix matches (`IsPrefix`) and exact matches are considered.
+3. The **most specific matching path wins** among rules from the same policy.
+4. Across multiple policies, capabilities are **unioned** — if any policy grants a capability, the request is allowed, unless any policy's matching path has `deny`.
+5. `deny` always wins over any other capability from any policy.
+
+<Note>
+  A leading `/` in a path is stripped during parsing. `path "/secret/data/foo"` and `path "secret/data/foo"` are equivalent.
+</Note>
+
+## Built-in policies
+
+### The `root` policy
+
+The `root` policy is immutable and cannot be deleted, modified, or assigned to tokens by non-root callers:
+
+```go
+// From vault/policy_store.go
+immutablePolicies = []string{
+    "root",
+    responseWrappingPolicyName,
+    controlGroupPolicyName,
+}
+```
+
+Any token with the `root` policy bypasses all ACL checks.
+
+### The `default` policy
+
+The `default` policy is automatically attached to every token unless `no_default_policy=true` is set. Its definition (from `vault/policy_store.go`) grants:
+
+```hcl
+# Allow tokens to look up their own properties
+path "auth/token/lookup-self" {
+    capabilities = ["read"]
+}
+
+# Allow tokens to renew themselves
+path "auth/token/renew-self" {
+    capabilities = ["update"]
+}
+
+# Allow tokens to revoke themselves
+path "auth/token/revoke-self" {
+    capabilities = ["update"]
+}
+
+# Allow a token to look up its own entity by id or name
+path "identity/entity/id/{{identity.entity.id}}" {
+  capabilities = ["read"]
+}
+
+# Allow a token to manage its own cubbyhole
+path "cubbyhole/*" {
+    capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+# Allow a token to wrap arbitrary values in a response-wrapping token
+path "sys/wrapping/wrap" {
+    capabilities = ["update"]
+}
+```
+
+### Policy storage paths
+
+| Policy type | Storage subpath |
+|---|---|
+| ACL | `sys/policy/` (barrier view: `policy/`) |
+| RGP | `sys/policy-rgp/` |
+| EGP | `sys/policy-egp/` |
+
+## Templated policies
+
+Path rules can reference identity entity and group metadata using template syntax:
+
+```hcl
+# Each user can only access their own secret path
+path "secret/data/users/{{identity.entity.id}}/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+# Use entity name instead of ID
+path "secret/data/users/{{identity.entity.name}}/*" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+```
+
+When a policy contains template directives, `Policy.Templated` is set to `true` and the template is expanded at evaluation time using the requesting token's associated entity.
+
+## Writing and managing policies
+
+```bash
+# Write a policy from a file
+vault policy write my-policy policy.hcl
+
+# Read a policy
+vault policy read my-policy
+
+# List all policies
+vault policy list
+
+# Delete a policy
+vault policy delete my-policy
+```
+
+```bash
+# Apply policies to a token at creation
+vault token create -policy=my-policy -policy=another-policy
+```
+
+<AccordionGroup>
+  <Accordion title="Why does my token get 403 even though a policy grants access?">
+    Check that the policy is actually attached to the token with `vault token lookup`. Confirm the path in the policy exactly matches the API path you are calling. Remember that trailing slashes matter — `secret/data/foo` and `secret/data/foo/` are different paths.
+  </Accordion>
+  <Accordion title="How does deny interact with multiple policies?">
+    If any matching path rule across any of the token's policies contains `deny`, the request is denied regardless of what other policies grant. `deny` is an absolute override.
+  </Accordion>
+  <Accordion title="Can I attach a policy to an identity entity instead of a token?">
+    Yes. Policies attached to an entity or its groups are automatically included in the effective policy set for any token that maps to that entity. This is the recommended approach for consistent access control across multiple auth methods.
+  </Accordion>
+</AccordionGroup>

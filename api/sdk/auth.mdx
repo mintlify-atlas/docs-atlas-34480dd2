@@ -1,0 +1,322 @@
+---
+title: "Go SDK: Auth & Token Client"
+description: "Create, look up, renew, and revoke tokens using the Auth and TokenAuth clients."
+---
+
+The `Auth` client provides authentication helpers, and the `TokenAuth` client (accessed via `client.Auth().Token()`) provides token-specific operations.
+
+```go
+auth := client.Auth()
+tokenAuth := client.Auth().Token()
+```
+
+## Login
+
+### `auth.Login(ctx context.Context, authMethod AuthMethod) (*Secret, error)`
+
+Performs a login using the provided `AuthMethod`. On success, automatically sets the client's token.
+
+```go
+import (
+    vault "github.com/hashicorp/vault/api"
+    approle "github.com/hashicorp/vault/api/auth/approle"
+)
+
+appRoleAuth, err := approle.NewAppRoleAuth(
+    "my-role-id",
+    &approle.SecretID{FromString: "my-secret-id"},
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+secret, err := client.Auth().Login(context.Background(), appRoleAuth)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Token:", secret.Auth.ClientToken)
+fmt.Println("Policies:", secret.Auth.Policies)
+fmt.Println("TTL:", secret.Auth.LeaseDuration)
+```
+
+---
+
+## Token Operations
+
+### Create Token
+
+#### `tokenAuth.Create(opts *TokenCreateRequest) (*Secret, error)`
+
+Creates a new token. The caller must have appropriate permissions.
+
+```go
+renewable := true
+secret, err := client.Auth().Token().Create(&vault.TokenCreateRequest{
+    Policies:       []string{"my-app-policy", "default"},
+    TTL:            "1h",
+    ExplicitMaxTTL: "24h",
+    DisplayName:    "my-app-token",
+    Renewable:      &renewable,
+    NoParent:       false,
+    NumUses:        0, // unlimited
+    Metadata:       map[string]string{"app": "my-service"},
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("New token:", secret.Auth.ClientToken)
+```
+
+#### `tokenAuth.CreateWithRole(opts *TokenCreateRequest, roleName string) (*Secret, error)`
+
+Creates a token scoped to a specific role.
+
+```go
+secret, err := client.Auth().Token().CreateWithRole(
+    &vault.TokenCreateRequest{
+        TTL: "1h",
+    },
+    "my-role",
+)
+```
+
+#### `tokenAuth.CreateOrphan(opts *TokenCreateRequest) (*Secret, error)`
+
+Creates a token with no parent. Orphan tokens are not revoked when the creating token expires.
+
+```go
+secret, err := client.Auth().Token().CreateOrphan(&vault.TokenCreateRequest{
+    Policies: []string{"default"},
+    TTL:      "24h",
+})
+```
+
+### `TokenCreateRequest` Fields
+
+```go
+type TokenCreateRequest struct {
+    ID              string            // Custom token ID (requires sudo)
+    Policies        []string          // Policies to attach
+    Metadata        map[string]string // Arbitrary key/value metadata
+    Lease           string            // Lease duration (deprecated, use TTL)
+    TTL             string            // Token TTL (e.g., "1h", "30m")
+    ExplicitMaxTTL  string            // Hard maximum TTL
+    Period          string            // Renewal period for periodic tokens
+    NoParent        bool              // Create as orphan token
+    NoDefaultPolicy bool              // Exclude the default policy
+    DisplayName     string            // Human-readable token name
+    NumUses         int               // Max uses; 0 = unlimited
+    Renewable       *bool             // Whether token is renewable
+    Type            string            // Token type: "service" or "batch"
+    EntityAlias     string            // Alias for the entity
+}
+```
+
+<ParamField body="Policies" type="array">
+  List of policy names to attach to the token.
+</ParamField>
+
+<ParamField body="TTL" type="string">
+  Token lifetime as a duration string (e.g., `"1h"`, `"30m"`, `"720h"`). The actual TTL is capped by the mount's and system's `max_lease_ttl`.
+</ParamField>
+
+<ParamField body="ExplicitMaxTTL" type="string">
+  A hard maximum TTL. The token cannot be renewed past this point regardless of policy.
+</ParamField>
+
+<ParamField body="NoParent" type="boolean">
+  If `true`, create an orphan token (not attached to the creating token's lifecycle).
+</ParamField>
+
+<ParamField body="Period" type="string">
+  Creates a periodic token. Periodic tokens do not expire if renewed within the period.
+</ParamField>
+
+<ParamField body="NumUses" type="integer">
+  Maximum number of uses. `0` means unlimited.
+</ParamField>
+
+<ParamField body="Renewable" type="*bool">
+  Whether the token can be renewed. Defaults to `true` for service tokens.
+</ParamField>
+
+---
+
+### Look Up Token
+
+#### `tokenAuth.LookupSelf() (*Secret, error)`
+
+Looks up information about the currently authenticated token.
+
+```go
+secret, err := client.Auth().Token().LookupSelf()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Accessor:", secret.Data["accessor"])
+fmt.Println("Policies:", secret.Data["policies"])
+fmt.Println("TTL:", secret.Data["ttl"])
+```
+
+#### `tokenAuth.Lookup(token string) (*Secret, error)`
+
+Looks up information about a specific token. Requires `auth/token/lookup` permission.
+
+```go
+secret, err := client.Auth().Token().Lookup("hvs.CAESIJ...")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+#### `tokenAuth.LookupAccessor(accessor string) (*Secret, error)`
+
+Looks up a token by its accessor. The accessor does not grant access to use the token.
+
+```go
+secret, err := client.Auth().Token().LookupAccessor("some-accessor-value")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Token policies:", secret.Data["policies"])
+```
+
+---
+
+### Renew Token
+
+#### `tokenAuth.RenewSelf(increment int) (*Secret, error)`
+
+Renews the currently authenticated token.
+
+```go
+// Renew for an additional 3600 seconds
+secret, err := client.Auth().Token().RenewSelf(3600)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("New TTL:", secret.Auth.LeaseDuration)
+```
+
+#### `tokenAuth.Renew(token string, increment int) (*Secret, error)`
+
+Renews a specific token.
+
+```go
+secret, err := client.Auth().Token().Renew("hvs.CAESIJ...", 3600)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+#### `tokenAuth.RenewAccessor(accessor string, increment int) (*Secret, error)`
+
+Renews a token identified by its accessor.
+
+```go
+secret, err := client.Auth().Token().RenewAccessor("my-accessor", 3600)
+```
+
+---
+
+### Revoke Token
+
+#### `tokenAuth.RevokeSelf(token string) error`
+
+Revokes the token attached to the current client. The `token` parameter is accepted for backward compatibility but is ignored — only the client's configured token is revoked.
+
+```go
+err := client.Auth().Token().RevokeSelf("")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+#### `tokenAuth.RevokeTree(token string) error`
+
+Revokes a token and all of its child tokens.
+
+```go
+err := client.Auth().Token().RevokeTree("hvs.CAESIJ...")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+#### `tokenAuth.RevokeAccessor(accessor string) error`
+
+Revokes a token identified by its accessor, along with its child tokens.
+
+```go
+err := client.Auth().Token().RevokeAccessor("my-accessor-value")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+#### `tokenAuth.RevokeOrphan(token string) error`
+
+Revokes a token without revoking its child tokens. Child tokens become orphaned.
+
+```go
+err := client.Auth().Token().RevokeOrphan("hvs.CAESIJ...")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+---
+
+## Token Lifecycle Example
+
+A common pattern for service accounts is to create a token, use it, and renew it before it expires:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    vault "github.com/hashicorp/vault/api"
+)
+
+func main() {
+    client, err := vault.NewClient(vault.DefaultConfig())
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Create a short-lived token
+    renewable := true
+    secret, err := client.Auth().Token().Create(&vault.TokenCreateRequest{
+        Policies:    []string{"my-app-policy"},
+        TTL:         "1h",
+        Renewable:   &renewable,
+        DisplayName: "my-service",
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    client.SetToken(secret.Auth.ClientToken)
+
+    // Use the client...
+    kv := client.KVv2("secret")
+    s, err := kv.Get(context.Background(), "my-app/config")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(s.Data)
+
+    // Renew before expiry
+    time.Sleep(50 * time.Minute)
+    _, err = client.Auth().Token().RenewSelf(3600)
+    if err != nil {
+        log.Fatal("Token renewal failed:", err)
+    }
+
+    fmt.Println("Token renewed successfully")
+}
+```

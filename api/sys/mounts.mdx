@@ -1,0 +1,410 @@
+---
+title: "sys/mounts"
+description: "List, enable, disable, and tune secrets engines mounted in Vault."
+---
+
+The `/sys/mounts` endpoints manage Vault's secrets engine mounts.
+
+## List Mounts
+
+Returns all currently mounted secrets engines.
+
+```
+GET /v1/sys/mounts
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/mounts
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+mounts, err := client.Sys().ListMounts()
+if err != nil {
+    log.Fatal(err)
+}
+for path, mount := range mounts {
+    fmt.Printf("%s => type=%s accessor=%s\n", path, mount.Type, mount.Accessor)
+}
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+Returns a map of mount path to `MountOutput` objects.
+
+```json
+{
+  "secret/": {
+    "uuid": "abc123",
+    "type": "kv",
+    "description": "",
+    "accessor": "kv_abc123",
+    "local": false,
+    "seal_wrap": false,
+    "external_entropy_access": false,
+    "plugin_version": "",
+    "running_plugin_version": "v0.17.0+builtin",
+    "deprecation_status": "",
+    "config": {
+      "default_lease_ttl": 0,
+      "max_lease_ttl": 0,
+      "force_no_cache": false
+    },
+    "options": {"version": "2"}
+  }
+}
+```
+
+<ResponseField name="uuid" type="string">
+  The unique identifier for this mount.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  The type of secrets engine (e.g., `kv`, `aws`, `pki`, `transit`).
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description of this mount.
+</ResponseField>
+
+<ResponseField name="accessor" type="string">
+  The accessor of this mount.
+</ResponseField>
+
+<ResponseField name="local" type="boolean">
+  Whether the mount is local to this cluster and not replicated.
+</ResponseField>
+
+<ResponseField name="seal_wrap" type="boolean">
+  Whether seal wrapping is enabled.
+</ResponseField>
+
+<ResponseField name="external_entropy_access" type="boolean">
+  Whether this mount has access to the external entropy source.
+</ResponseField>
+
+<ResponseField name="plugin_version" type="string">
+  The pinned version of the plugin.
+</ResponseField>
+
+<ResponseField name="running_plugin_version" type="string">
+  The version of the plugin currently running.
+</ResponseField>
+
+<ResponseField name="deprecation_status" type="string">
+  Deprecation status of the plugin, if applicable.
+</ResponseField>
+
+<ResponseField name="config" type="object">
+  Mount configuration.
+  <Expandable title="properties">
+    <ResponseField name="default_lease_ttl" type="integer">Default lease TTL in seconds.</ResponseField>
+    <ResponseField name="max_lease_ttl" type="integer">Maximum lease TTL in seconds.</ResponseField>
+    <ResponseField name="force_no_cache" type="boolean">Whether to disable caching.</ResponseField>
+    <ResponseField name="token_type" type="string">Default token type.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="options" type="object">
+  Mount-specific options (e.g., `{"version": "2"}` for KV v2).
+</ResponseField>
+
+---
+
+## Get Mount
+
+Returns configuration for a specific mount.
+
+```
+GET /v1/sys/mounts/<path>
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/mounts/secret
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+mount, err := client.Sys().GetMount("secret")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(mount.Type, mount.Accessor)
+```
+  </Tab>
+</Tabs>
+
+---
+
+## Enable Secrets Engine
+
+Enables a new secrets engine at the specified path.
+
+```
+POST /v1/sys/mounts/<path>
+```
+
+### Request Parameters
+
+<ParamField body="type" type="string" required>
+  The type of secrets engine (e.g., `kv`, `aws`, `pki`, `transit`, `database`).
+</ParamField>
+
+<ParamField body="description" type="string">
+  Human-readable description.
+</ParamField>
+
+<ParamField body="local" type="boolean">
+  If `true`, this mount is local to the cluster and will not be replicated.
+</ParamField>
+
+<ParamField body="seal_wrap" type="boolean">
+  Enable seal wrapping for the mount.
+</ParamField>
+
+<ParamField body="external_entropy_access" type="boolean">
+  Allow this backend to request entropy from an external entropy source.
+</ParamField>
+
+<ParamField body="options" type="object">
+  Mount-type-specific options. For KV, use `{"version": "2"}` to mount KV v2.
+</ParamField>
+
+<ParamField body="config" type="object">
+  Mount configuration.
+  <Expandable title="properties">
+    <ParamField body="default_lease_ttl" type="string">Default lease TTL (e.g., `"1h"`).</ParamField>
+    <ParamField body="max_lease_ttl" type="string">Maximum lease TTL.</ParamField>
+    <ParamField body="force_no_cache" type="boolean">Disable caching.</ParamField>
+    <ParamField body="listing_visibility" type="string">Control listing visibility.</ParamField>
+  </Expandable>
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X POST \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "kv",
+    "description": "My KV store",
+    "options": {"version": "2"}
+  }' \
+  https://vault.example.com/v1/sys/mounts/my-secrets
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().Mount("my-secrets", &api.MountInput{
+    Type:        "kv",
+    Description: "My KV store",
+    Options:     map[string]string{"version": "2"},
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Disable Secrets Engine
+
+Disables the secrets engine at the given path. All secrets and leases are immediately revoked.
+
+```
+DELETE /v1/sys/mounts/<path>
+```
+
+<Warning>
+  Disabling a secrets engine revokes all secrets and leases associated with it.
+</Warning>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X DELETE \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/mounts/my-secrets
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().Unmount("my-secrets")
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Read Mount Tune Configuration
+
+```
+GET /v1/sys/mounts/<path>/tune
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/mounts/secret/tune
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+config, err := client.Sys().MountConfig("secret")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Default TTL:", config.DefaultLeaseTTL)
+fmt.Println("Max TTL:", config.MaxLeaseTTL)
+```
+  </Tab>
+</Tabs>
+
+---
+
+## Tune Mount
+
+Update the configuration for a mount.
+
+```
+POST /v1/sys/mounts/<path>/tune
+```
+
+<ParamField body="default_lease_ttl" type="string">
+  Default lease TTL.
+</ParamField>
+
+<ParamField body="max_lease_ttl" type="string">
+  Maximum lease TTL.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description.
+</ParamField>
+
+<ParamField body="audit_non_hmac_request_keys" type="array">
+  List of request keys that will not be HMAC'd in the audit log.
+</ParamField>
+
+<ParamField body="audit_non_hmac_response_keys" type="array">
+  List of response keys that will not be HMAC'd in the audit log.
+</ParamField>
+
+<ParamField body="listing_visibility" type="string">
+  Controls unauthenticated listing visibility.
+</ParamField>
+
+<ParamField body="passthrough_request_headers" type="array">
+  Request headers to allow through to the backend.
+</ParamField>
+
+<ParamField body="allowed_response_headers" type="array">
+  Response headers the backend may set.
+</ParamField>
+
+<ParamField body="token_type" type="string">
+  Default token type (`default`, `batch`, `service`).
+</ParamField>
+
+<ParamField body="plugin_version" type="string">
+  Pin this mount to a specific plugin version.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X POST \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"default_lease_ttl": "1h", "max_lease_ttl": "24h"}' \
+  https://vault.example.com/v1/sys/mounts/secret/tune
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+defaultTTL := "1h"
+maxTTL := "24h"
+err := client.Sys().TuneMountAllowNil("secret", api.TuneMountConfigInput{
+    DefaultLeaseTTL: &defaultTTL,
+    MaxLeaseTTL:     &maxTTL,
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+---
+
+## Remount (Move)
+
+Moves a secrets engine from one path to another. Returns a migration ID that can be polled for status.
+
+```
+POST /v1/sys/remount
+GET  /v1/sys/remount/status/<migration_id>
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+# Start the remount
+curl \
+  -X POST \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"from": "old-path", "to": "new-path"}' \
+  https://vault.example.com/v1/sys/remount
+
+# Check status
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/remount/status/<migration_id>
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+// Blocking call - polls until complete
+err := client.Sys().Remount("old-path", "new-path")
+if err != nil {
+    log.Fatal(err)
+}
+
+// Non-blocking: start the remount and check status manually
+result, err := client.Sys().StartRemount("old-path", "new-path")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Migration ID:", result.MigrationID)
+
+status, err := client.Sys().RemountStatus(result.MigrationID)
+fmt.Println("Status:", status.MigrationInfo.MigrationStatus)
+```
+  </Tab>
+</Tabs>

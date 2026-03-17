@@ -1,0 +1,212 @@
+---
+title: "vault namespace"
+description: "Create, list, delete, lookup, patch, and lock/unlock Vault namespaces. Requires Vault Enterprise."
+---
+
+## Overview
+
+The `vault namespace` command groups subcommands for managing namespaces. Namespaces are an isolation mechanism for multi-tenancy and are a feature of Vault Enterprise.
+
+```
+Usage: vault namespace <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `create` | Create a new namespace |
+| `delete` | Delete an existing namespace |
+| `list` | List child namespaces |
+| `lookup` | Look up an existing namespace |
+| `patch` | Patch an existing namespace |
+| `lock` | Lock the API for a namespace |
+| `unlock` | Unlock the API for a namespace |
+
+<Info>
+  Namespaces are a Vault Enterprise feature. These commands are not available in Vault Community Edition.
+</Info>
+
+---
+
+## vault namespace create
+
+Creates a child namespace. The namespace created will be relative to the namespace provided in either the `VAULT_NAMESPACE` environment variable or the `-namespace` CLI flag.
+
+```
+Usage: vault namespace create [options] PATH
+```
+
+### Flags
+
+<ParamField path="-custom-metadata" type="string">
+  Arbitrary `key=value` metadata to associate with the namespace. Can be specified multiple times to add multiple pieces of metadata.
+</ParamField>
+
+### Examples
+
+```bash
+# Create namespace ns1/
+vault namespace create ns1
+
+# Create a child namespace ns1/ns2/ from within the ns1 namespace
+vault namespace create -namespace=ns1 ns2
+
+# Create a namespace with custom metadata
+vault namespace create -custom-metadata=owner=team-a -custom-metadata=env=prod ns1
+
+# JSON output to get the namespace ID
+vault namespace create -format=json ns1 | jq -r '.data.id'
+```
+
+---
+
+## vault namespace delete
+
+Deletes an existing namespace. The namespace deleted will be relative to the namespace provided in either the `VAULT_NAMESPACE` environment variable or the `-namespace` CLI flag.
+
+```
+Usage: vault namespace delete [options] PATH
+```
+
+<Warning>
+  Deleting a namespace permanently deletes all secrets, policies, tokens, and auth methods within it. This operation cannot be undone.
+</Warning>
+
+### Examples
+
+```bash
+# Delete namespace ns1/
+vault namespace delete ns1
+
+# Delete a child namespace
+vault namespace delete -namespace=ns1 ns2
+```
+
+---
+
+## vault namespace list
+
+Lists the enabled child namespaces.
+
+```
+Usage: vault namespace list [options]
+```
+
+### Flags
+
+<ParamField path="-detailed" type="bool" default="false">
+  Print detailed information such as namespace ID.
+</ParamField>
+
+### Examples
+
+```bash
+# List namespaces in the root namespace
+vault namespace list
+
+# List namespaces within ns1
+vault namespace list -namespace=ns1
+
+# JSON output
+vault namespace list -format=json
+
+# Detailed listing
+vault namespace list -detailed
+```
+
+---
+
+## vault namespace lookup
+
+Looks up information about an existing namespace.
+
+```
+Usage: vault namespace lookup [options] PATH
+```
+
+### Examples
+
+```bash
+vault namespace lookup ns1
+
+# Lookup a child namespace
+vault namespace lookup -namespace=ns1 ns2
+```
+
+---
+
+## vault namespace patch
+
+Patches an existing namespace. Only updates the fields that are specified.
+
+```
+Usage: vault namespace patch [options] PATH
+```
+
+### Flags
+
+<ParamField path="-custom-metadata" type="string">
+  Arbitrary `key=value` metadata to associate with the namespace. Can be specified multiple times.
+</ParamField>
+
+### Examples
+
+```bash
+vault namespace patch -custom-metadata=owner=new-team ns1
+```
+
+---
+
+## vault namespace lock
+
+Locks the API for a namespace, preventing any API requests from being served within that namespace.
+
+```
+Usage: vault namespace lock [options] PATH
+```
+
+<Warning>
+  Locking a namespace immediately prevents all operations within it. Ensure you have a plan to unlock before proceeding.
+</Warning>
+
+### Examples
+
+```bash
+vault namespace lock ns1
+```
+
+---
+
+## vault namespace unlock
+
+Unlocks a previously locked namespace API, restoring access.
+
+```
+Usage: vault namespace unlock [options] PATH
+```
+
+### Examples
+
+```bash
+vault namespace unlock ns1
+```
+
+---
+
+## Working with Namespaces
+
+Namespace context can be set globally via the `VAULT_NAMESPACE` environment variable or per-command via the `-namespace` flag:
+
+```bash
+# Set namespace globally
+export VAULT_NAMESPACE=ns1
+vault kv put -mount=secret foo bar=baz
+
+# Or per-command
+vault kv put -namespace=ns1 -mount=secret foo bar=baz
+```
+
+To operate in the root namespace while `VAULT_NAMESPACE` is set:
+
+```bash
+vault namespace list -namespace=root
+```

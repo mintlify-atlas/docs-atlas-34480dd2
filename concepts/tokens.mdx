@@ -1,0 +1,237 @@
+---
+title: "Tokens"
+description: "How Vault tokens work: service vs. batch tokens, the token hierarchy, accessors, TTLs, policies, and periodic tokens."
+---
+
+Every Vault request requires a token. Tokens are the core identity primitive — they carry a policy set, a TTL, and optional metadata. The Token Store (`vault/token_store.go`) is responsible for creating, looking up, renewing, and revoking them.
+
+## TokenEntry fields
+
+The `TokenEntry` struct in `sdk/logical/token.go` defines every field stored for a token:
+
+```go
+// From sdk/logical/token.go
+type TokenEntry struct {
+    Type           TokenType         // service or batch
+    ID             string            // the actual token value (random UUID)
+    ExternalID     string            // returned to caller for service tokens
+    Accessor       string            // opaque handle, does not grant access
+    Parent         string            // parent token ID (revocation tree)
+    Policies       []string          // named ACL policies
+    InlinePolicy   string            // inline HCL rules embedded in token
+    Path           string            // auth path that created this token
+    Meta           map[string]string // arbitrary key=value audit metadata
+    DisplayName    string            // human-readable label
+    NumUses        int               // 0 = unlimited; -1 = final use in progress
+    CreationTime   int64             // Unix timestamp
+    TTL            time.Duration     // duration set at creation
+    ExplicitMaxTTL time.Duration     // hard cap regardless of renewals
+    Role           string            // role used for creation, if any
+    Period         time.Duration     // period for periodic tokens
+    EntityID       string            // linked identity entity
+    BoundCIDRs     []*sockaddr.SockAddrMarshaler
+    NamespaceID    string
+}
+```
+
+## Service tokens vs. batch tokens
+
+<Tabs>
+  <Tab title="Service tokens">
+    Service tokens (prefix `hvs.`) are the traditional Vault token type. They are persisted to storage, support renewal, have a cubbyhole, and create a parent-child revocation tree.
+
+    ```bash
+    # Create a service token (default)
+    vault token create -type=service -ttl=1h
+    ```
+
+    - Stored in the barrier under `token/id/<salted-id>`
+    - Support `vault token renew`
+    - Revocation cascades to child tokens
+    - Can be looked up by accessor
+  </Tab>
+  <Tab title="Batch tokens">
+    Batch tokens (prefix `hvb.`) are lightweight and encrypted but not stored. They are ideal for high-throughput use cases such as service-to-service calls.
+
+    ```bash
+    # Create a batch token
+    vault token create -type=batch -ttl=1h
+    ```
+
+    - Not persisted to storage (validated by decryption)
+    - Cannot be renewed
+    - No cubbyhole
+    - No parent-child relationship — revoking a parent does not revoke child batch tokens
+    - Not listed by `vault token accessors`
+  </Tab>
+</Tabs>
+
+<Info>
+  Token type prefixes changed from the legacy 2-character style (`s.`, `b.`) to the current 4-character style (`hvs.`, `hvb.`). Both are accepted. The prefix lengths are defined as `TokenPrefixLength = 4` and `OldTokenPrefixLength = 2` in `token_store.go`.
+</Info>
+
+## Token length and format
+
+```go
+// From vault/token_store.go
+TokenLength          = 24  // random bytes, without namespace info
+MaxNsIdLength        = 6   // "." + 5-char namespace ID
+TokenPrefixLength    = 4   // "hvs.", "hvb.", "hvr."
+OldTokenPrefixLength = 2   // "s.",  "b.",   "r."
+```
+
+A fully qualified service token looks like: `hvs.<24-char-random>[.<namespace-id>]`
+
+## Storage layout
+
+The Token Store uses three index prefixes within its barrier view:
+
+| Prefix | Purpose |
+|---|---|
+| `id/` | Primary index: token ID → token entry |
+| `accessor/` | Secondary index: accessor → token ID |
+| `parent/` | Secondary index: parent ID → list of child IDs |
+| `roles/` | Token role definitions |
+
+## Token hierarchy and revocation
+
+Every token (except orphan tokens) has a parent. When a parent is revoked, all children are revoked recursively. This creates a revocation tree:
+
+```
+root token
+  └─ operator token
+       ├─ app-A service token
+       │    └─ app-A child token
+       └─ app-B service token
+```
+
+Revoking the operator token immediately revokes all tokens below it. Orphan tokens (`no_parent = true`) break this chain:
+
+```bash
+# Create an orphan token (no parent)
+vault token create -orphan -ttl=8h
+```
+
+The API path for orphan creation maps to `ts.handleCreateOrphan` in the token store (`auth/token/create-orphan`).
+
+## Accessor vs. token ID
+
+The token ID is the secret — presenting it to Vault grants all capabilities the token possesses. The **accessor** is an opaque, non-secret handle stored alongside the token. Operators can use it to:
+
+- Look up token metadata without revealing the token value
+- Revoke a specific token by accessor
+- List all accessors to audit active tokens
+
+```bash
+# Look up by accessor (does not grant access)
+vault token lookup -accessor "<accessor-value>"
+
+# Revoke by accessor
+vault token revoke -accessor "<accessor-value>"
+
+# List all accessors (requires sudo on auth/token/accessors)
+vault list auth/token/accessors
+```
+
+## TTL and max TTL
+
+Token lifetimes are governed by three values:
+
+| Field | Description |
+|---|---|
+| `TTL` | Duration set at creation. Token expires after this interval. |
+| `ExplicitMaxTTL` | Hard cap. Even if renewed, the token cannot live longer than `creation_time + explicit_max_ttl`. |
+| `Period` | For periodic tokens: each renewal resets the TTL to this value. |
+
+```bash
+# Token with TTL of 1 hour and a hard max of 24 hours
+vault token create -ttl=1h -explicit-max-ttl=24h
+
+# Periodic token: renews for 6 hours each time, indefinitely
+vault token create -period=6h
+```
+
+Renewable tokens (the default; `renewable = true` in `token_store.go`) can extend their TTL up to the system or mount maximum TTL via `vault token renew`.
+
+## Token policies
+
+Policies are attached to a token at creation:
+
+```go
+// From vault/token_store.go — creation fields
+"policies": {
+    Type:        framework.TypeStringSlice,
+    Description: "List of policies for the token",
+},
+"no_default_policy": {
+    Type:        framework.TypeBool,
+    Description: "Do not include default policy for this token",
+},
+```
+
+By default, every token receives the `default` policy in addition to any explicitly assigned policies. Pass `no_default_policy=true` to suppress it. A token's effective permissions are the union of all its assigned policies (most permissive path wins, with `deny` as an override).
+
+## Root tokens
+
+A root token is any token with the `root` policy. Root tokens:
+
+- Have no expiry by default
+- Are not subject to ACL checks — they can access any path with any capability
+- Are tracked in the `nonexpiring` map in the Expiration Manager:
+
+  ```go
+  // From vault/expiration.go
+  func (le *leaseEntry) nonexpiringToken() bool {
+      return !le.Auth.LeaseEnabled() &&
+          len(le.Auth.Policies) == 1 &&
+          le.Auth.Policies[0] == "root" && ...
+  }
+  ```
+
+<Warning>
+  Root tokens should only be used for emergency access or initial bootstrapping. Use `vault operator generate-root` to create one when needed, and revoke it immediately after use.
+</Warning>
+
+## Periodic tokens
+
+Periodic tokens have a `Period` set and no `ExplicitMaxTTL`. Each renewal call resets the TTL back to `Period`, allowing the token to live indefinitely as long as it is renewed within the period window. They are commonly used by long-running services that need a token that never expires so long as the service is healthy.
+
+```bash
+# Create a periodic token (period = 12h)
+vault token create -period=12h -policy=my-service
+
+# Renew it before 12h elapses to reset the clock
+vault token renew "<token>"
+```
+
+## Token metadata
+
+The `Meta` field stores arbitrary string key-value pairs that appear in audit logs and are returned by `vault token lookup`. This is useful for attaching context like `user`, `source`, or `environment` to a token:
+
+```bash
+vault token create \
+  -metadata="app=payments" \
+  -metadata="env=prod" \
+  -policy=payments-ro
+```
+
+```go
+// From sdk/logical/token.go
+// Used for auditing. This could include things like "source", "user", "ip"
+Meta map[string]string `json:"meta"`
+```
+
+## Use-limited tokens
+
+Set `num_uses` to restrict how many times a token can be used:
+
+```bash
+# Single-use token
+vault token create -use-limit=1 -ttl=5m
+```
+
+Special `NumUses` values:
+- `0` — unlimited uses
+- `-1` — final use currently in flight
+- `-2` — tainted, revocation in progress
+- `-3` — tainted, revocation previously failed (tidy candidate)

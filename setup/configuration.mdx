@@ -1,0 +1,297 @@
+---
+title: "Configuration"
+description: "Configure Vault's storage backend, listeners, seal, telemetry, and logging using HCL configuration files."
+---
+
+Vault is configured with one or more HCL (or JSON) configuration files passed to `vault server -config`. You can specify the flag multiple times to merge configurations from several files or point it at a directory containing `.hcl` and `.json` files.
+
+```bash
+vault server -config=/etc/vault/config.hcl
+vault server -config=/etc/vault/config.d/
+```
+
+<Note>
+  Changes to the configuration file require a process restart to take effect, except for log level changes which can be applied by sending `SIGHUP` to the Vault process.
+</Note>
+
+## Storage stanza
+
+The `storage` stanza is required for production. It defines where Vault persists its encrypted data.
+
+<Tabs>
+  <Tab title="Integrated storage (Raft)">
+    Raft is the recommended storage backend for new deployments. It is built into Vault and requires no external dependencies.
+
+    ```hcl
+    storage "raft" {
+      path    = "/vault/data"
+      node_id = "vault-node-1"
+
+      retry_join {
+        leader_api_addr = "https://vault-1.example.com:8200"
+      }
+
+      retry_join {
+        leader_api_addr = "https://vault-2.example.com:8200"
+      }
+    }
+    ```
+
+    When using Raft storage, `cluster_addr` must be set and `disable_mlock` must be explicitly configured:
+
+    ```hcl
+    cluster_addr  = "https://vault-node-1.example.com:8201"
+    api_addr      = "https://vault-node-1.example.com:8200"
+    disable_mlock = true
+    ```
+
+    <Info>
+      `disable_mlock` must be explicitly set to `true` or `false` when using Raft. Prior to Vault 1.20, it defaulted to `false` when unset. Setting it to `true` is only recommended on systems with encrypted swap or where swap is disabled.
+    </Info>
+  </Tab>
+
+  <Tab title="Consul">
+    Consul provides both storage and HA coordination. When Consul is used as the storage backend, service registration is automatically configured using the same connection details.
+
+    ```hcl
+    storage "consul" {
+      address = "127.0.0.1:8500"
+      path    = "vault/"
+      token   = "consul-acl-token"
+
+      tls_ca_file   = "/etc/vault/consul-ca.pem"
+      tls_cert_file = "/etc/vault/consul-cert.pem"
+      tls_key_file  = "/etc/vault/consul-key.pem"
+    }
+    ```
+  </Tab>
+
+  <Tab title="File">
+    The file backend is simple but does not support HA. Suitable for single-node deployments or testing.
+
+    ```hcl
+    storage "file" {
+      path = "/vault/data"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Listener stanza
+
+The `listener` stanza defines how Vault binds to network interfaces. The only production-supported type is `tcp`.
+
+```hcl
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_cert_file = "/etc/vault/tls/vault.crt"
+  tls_key_file  = "/etc/vault/tls/vault.key"
+
+  # Optionally restrict to TLS 1.2+
+  tls_min_version = "tls12"
+
+  # Optional: client certificate authentication
+  # tls_require_and_verify_client_cert = true
+  # tls_client_ca_file = "/etc/vault/tls/ca.crt"
+}
+```
+
+<Warning>
+  Vault should always be run with TLS in production. Without TLS, secrets are transmitted in plaintext over the network.
+</Warning>
+
+### Disabling TLS (not recommended)
+
+Only acceptable in isolated environments:
+
+```hcl
+listener "tcp" {
+  address     = "0.0.0.0:8200"
+  tls_disable = true
+}
+```
+
+### Cluster listener
+
+Vault uses a separate cluster port (default: `api_port + 1`, i.e., 8201) for server-to-server communication. You can specify it explicitly:
+
+```hcl
+listener "tcp" {
+  address         = "0.0.0.0:8200"
+  cluster_address = "0.0.0.0:8201"
+  tls_cert_file   = "/etc/vault/tls/vault.crt"
+  tls_key_file    = "/etc/vault/tls/vault.key"
+}
+```
+
+## Seal stanza
+
+By default, Vault uses Shamir's Secret Sharing. The unseal keys are split among operators and must be entered manually after each restart. You can configure an auto-unseal provider to have Vault unseal itself using a cloud KMS or HSM.
+
+<CodeGroup>
+
+```hcl AWS KMS
+seal "awskms" {
+  region     = "us-east-1"
+  kms_key_id = "alias/vault-unseal-key"
+}
+```
+
+```hcl Azure Key Vault
+seal "azurekeyvault" {
+  tenant_id      = "<tenant-id>"
+  client_id      = "<client-id>"
+  client_secret  = "<client-secret>"
+  vault_name     = "vault-unseal"
+  key_name       = "vault-key"
+}
+```
+
+```hcl GCP Cloud KMS
+seal "gcpckms" {
+  project    = "my-gcp-project"
+  region     = "global"
+  key_ring   = "vault-keyring"
+  crypto_key = "vault-key"
+}
+```
+
+</CodeGroup>
+
+<Info>
+  When auto-unseal is configured, `vault operator init` generates recovery keys instead of unseal keys. The defaults are 5 recovery shares with a threshold of 3 (matching `defRecoveryShares = 5` and `defRecoveryThreshold = 3` in `command/operator_init.go`).
+</Info>
+
+## Telemetry stanza
+
+Vault can emit metrics to a variety of backends:
+
+```hcl
+telemetry {
+  statsite_address            = ""
+  statsd_address              = ""
+  disable_hostname            = false
+  enable_hostname_label       = false
+
+  prometheus_retention_time   = "30s"
+  disable_hostname            = true
+
+  # Dogstatsd
+  dogstatsd_addr  = "127.0.0.1:8125"
+  dogstatsd_tags  = ["env:production", "region:us-east-1"]
+}
+```
+
+When Prometheus retention is set, metrics are exposed at `/v1/sys/metrics?format=prometheus`. Unauthenticated access to this endpoint can be enabled per-listener:
+
+```hcl
+listener "tcp" {
+  address = "0.0.0.0:8200"
+  # ...
+  telemetry {
+    unauthenticated_metrics_access = true
+  }
+}
+```
+
+## Log level and format
+
+Log settings can be placed at the top level of the configuration file or overridden via environment variables:
+
+```hcl
+log_level  = "info"    # trace, debug, info, warn, error
+log_format = "json"    # standard or json
+log_file   = "/var/log/vault/vault.log"
+log_rotate_bytes    = 10485760   # 10 MB
+log_rotate_max_files = 5
+```
+
+Environment variable overrides:
+
+| Environment variable | Description |
+|---|---|
+| `VAULT_LOG_LEVEL` | Log level (`trace`, `debug`, `info`, `warn`, `error`) |
+| `VAULT_LOG_FORMAT` | Log format (`standard`, `json`) |
+| `VAULT_DISABLE_MLOCK` | Set to `true` to disable mlock |
+| `VAULT_GRPC_LOGGING` | Set to any value to enable gRPC logging |
+| `VAULT_UI` | Set to `true` or `false` to override the `ui` config |
+
+## Complete example: single-node Raft
+
+```hcl
+# /etc/vault/config.hcl
+
+ui            = true
+disable_mlock = true
+
+storage "raft" {
+  path    = "/vault/data"
+  node_id = "vault-1"
+}
+
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_cert_file = "/etc/vault/tls/vault.crt"
+  tls_key_file  = "/etc/vault/tls/vault.key"
+}
+
+api_addr     = "https://vault.example.com:8200"
+cluster_addr = "https://vault.example.com:8201"
+
+telemetry {
+  prometheus_retention_time = "30s"
+  disable_hostname          = true
+}
+
+log_level  = "info"
+log_format = "json"
+```
+
+## Complete example: three-node Raft cluster
+
+```hcl
+# /etc/vault/config.hcl (node 1 of 3)
+
+ui            = true
+disable_mlock = true
+
+storage "raft" {
+  path    = "/vault/data"
+  node_id = "vault-1"
+
+  retry_join {
+    leader_api_addr         = "https://vault-1.example.com:8200"
+    leader_ca_cert_file     = "/etc/vault/tls/ca.crt"
+    leader_client_cert_file = "/etc/vault/tls/vault.crt"
+    leader_client_key_file  = "/etc/vault/tls/vault.key"
+  }
+
+  retry_join {
+    leader_api_addr         = "https://vault-2.example.com:8200"
+    leader_ca_cert_file     = "/etc/vault/tls/ca.crt"
+    leader_client_cert_file = "/etc/vault/tls/vault.crt"
+    leader_client_key_file  = "/etc/vault/tls/vault.key"
+  }
+
+  retry_join {
+    leader_api_addr         = "https://vault-3.example.com:8200"
+    leader_ca_cert_file     = "/etc/vault/tls/ca.crt"
+    leader_client_cert_file = "/etc/vault/tls/vault.crt"
+    leader_client_key_file  = "/etc/vault/tls/vault.key"
+  }
+}
+
+listener "tcp" {
+  address         = "0.0.0.0:8200"
+  cluster_address = "0.0.0.0:8201"
+  tls_cert_file   = "/etc/vault/tls/vault.crt"
+  tls_key_file    = "/etc/vault/tls/vault.key"
+  tls_min_version = "tls12"
+}
+
+api_addr     = "https://vault-1.example.com:8200"
+cluster_addr = "https://vault-1.example.com:8201"
+
+log_level  = "info"
+log_format = "json"
+```

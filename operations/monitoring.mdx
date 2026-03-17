@@ -1,0 +1,229 @@
+---
+title: "Monitoring Vault"
+description: "Monitor Vault's health, performance, and security posture using health endpoints, telemetry, structured logs, and the vault monitor command."
+---
+
+A production Vault deployment requires continuous monitoring across multiple dimensions: availability, performance, security events, and capacity. This page covers the primary monitoring mechanisms available in Vault.
+
+## Health endpoint
+
+The `/v1/sys/health` endpoint provides a simple HTTP probe for load balancers and monitoring systems. It returns different HTTP status codes depending on Vault's state:
+
+| Status Code | Meaning |
+|-------------|----------|
+| `200` | Vault is initialized, unsealed, and active |
+| `429` | Vault is unsealed and in standby mode |
+| `472` | Vault is a DR secondary (active) |
+| `473` | Vault is in Performance Standby |
+| `501` | Vault is not initialized |
+| `503` | Vault is sealed |
+
+```bash
+# Basic health check
+curl -s https://vault.example.com:8200/v1/sys/health | jq .
+
+# Consider standby nodes healthy (useful for load balancers)
+curl -s "https://vault.example.com:8200/v1/sys/health?standbyok=true"
+```
+
+You can customize which status codes trigger healthy/unhealthy responses using query parameters:
+
+```bash
+# Treat unsealed standbys as active (returns 200 instead of 429)
+curl "https://vault.example.com:8200/v1/sys/health?standbycode=200"
+```
+
+## Telemetry
+
+Vault emits real-time metrics in multiple formats. Configure the `telemetry` stanza in your configuration file:
+
+<Tabs>
+  <Tab title="Prometheus">
+    ```hcl
+    telemetry {
+      prometheus_retention_time = "30s"
+      disable_hostname          = true
+    }
+    ```
+
+    Scrape metrics from `GET /v1/sys/metrics?format=prometheus`:
+
+    ```bash
+    curl -H "X-Vault-Token: $VAULT_TOKEN" \
+      "https://vault.example.com:8200/v1/sys/metrics?format=prometheus"
+    ```
+  </Tab>
+  <Tab title="StatsD">
+    ```hcl
+    telemetry {
+      statsd_address = "statsd.example.com:8125"
+    }
+    ```
+  </Tab>
+  <Tab title="CloudWatch">
+    ```hcl
+    telemetry {
+      circonus_api_token = "..."
+    }
+    ```
+
+    For AWS CloudWatch, use the CloudWatch agent to receive StatsD metrics from Vault.
+  </Tab>
+  <Tab title="DogStatsD">
+    ```hcl
+    telemetry {
+      dogstatsd_addr  = "localhost:8125"
+      dogstatsd_tags  = ["environment:production", "cluster:us-east-1"]
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Key metrics
+
+### Request metrics
+
+| Metric | Description |
+|--------|-------------|
+| `vault.core.handle_request` | Latency and count of all requests processed by Vault core |
+| `vault.core.handle_login_request` | Latency and count of authentication requests |
+| `vault.core.post_unseal` | Time taken to complete post-unseal setup |
+| `vault.route.read.<mount>` | Latency for read operations on a specific mount |
+| `vault.route.write.<mount>` | Latency for write operations on a specific mount |
+
+### Memory and runtime metrics
+
+| Metric | Description |
+|--------|-------------|
+| `vault.runtime.alloc_bytes` | Bytes of allocated heap memory |
+| `vault.runtime.sys_bytes` | Total bytes obtained from the OS |
+| `vault.runtime.num_goroutines` | Number of live goroutines |
+| `vault.runtime.gc_pause_ns` | Nanoseconds spent in GC stop-the-world pauses |
+| `vault.runtime.malloc_count` | Cumulative count of heap allocations |
+
+### Raft storage metrics
+
+| Metric | Description |
+|--------|-------------|
+| `vault.raft.apply` | Time to apply Raft log entries |
+| `vault.raft.commitTime` | Time to commit a Raft transaction |
+| `vault.raft.leader.lastContact` | Time since the leader was last in contact with a quorum |
+| `vault.raft.replication.appendEntries.rpc` | Time for leader-to-follower log replication |
+
+### Token metrics
+
+| Metric | Description |
+|--------|-------------|
+| `vault.token.count` | Total number of tokens |
+| `vault.token.creation` | Rate of token creation |
+| `vault.token.lookup` | Latency of token lookup operations |
+
+<Tip>
+  Alert on `vault.raft.leader.lastContact` exceeding 500ms — this indicates Raft consensus problems. Alert on `vault.core.handle_request` p99 exceeding your SLO.
+</Tip>
+
+## Log levels
+
+Vault produces structured logs using [go-hclog](https://github.com/hashicorp/go-hclog). Configure the log level in `config.hcl`:
+
+```hcl
+log_level = "info"
+log_format = "json"
+```
+
+Or set it at runtime via environment variable:
+
+```bash
+export VAULT_LOG_LEVEL=debug
+```
+
+Available log levels (most verbose to least):
+
+| Level | Use case |
+|-------|----------|
+| `trace` | Extremely detailed — includes request/response data. Use only for debugging. |
+| `debug` | Detailed internal state. Useful for troubleshooting. |
+| `info` | Normal operational events (default). |
+| `warn` | Non-fatal issues that may require attention. |
+| `error` | Failures that require immediate attention. |
+
+Change the log level at runtime without restarting:
+
+```bash
+vault write sys/loggers level=debug
+
+# Reset to default after debugging
+vault write sys/loggers level=info
+```
+
+## Streaming logs with vault monitor
+
+The `vault monitor` command streams live log output from a running Vault server to your terminal, similar to `tail -f`:
+
+```bash
+# Stream info-level logs
+vault monitor
+
+# Stream debug-level logs
+vault monitor -log-level=debug
+
+# Stream trace-level logs (very verbose)
+vault monitor -log-level=trace
+```
+
+This is useful during incident investigation when you need real-time visibility into what Vault is doing without restarting the process at a different log level.
+
+## Audit log monitoring
+
+Audit logs provide a security-focused record of every request and response. See [Audit Devices](/security/audit-devices) for configuration details.
+
+For security monitoring, watch audit logs for:
+
+- Failed authentication attempts (`error` field is non-empty on auth entries)
+- Access to sensitive paths (e.g., `sys/`, `auth/token/root`)
+- Token creation with excessive TTLs or capabilities
+- Policy changes (`sys/policies/`)
+- Unseal and seal operations
+
+Example: parsing audit logs with `jq`:
+
+```bash
+# Show all failed requests in the last hour
+jq 'select(.response.auth.policy_results.allowed == false)' /var/log/vault_audit.log
+
+# Show all root token usage
+jq 'select(.auth.display_name == "root")' /var/log/vault_audit.log
+
+# Show all requests to the PKI engine
+jq 'select(.request.mount_type == "pki")' /var/log/vault_audit.log
+```
+
+## Capacity planning
+
+Monitor these indicators to plan for capacity before hitting limits:
+
+<CardGroup cols={2}>
+  <Card title="Storage size" icon="database">
+    Track Raft storage directory size. Vault's storage grows as secrets, leases, and tokens accumulate. Run `vault operator raft autopilot state` to check cluster health.
+  </Card>
+  <Card title="Active token count" icon="key">
+    High token counts increase memory usage and lookup latency. Enable periodic token cleanup with `sys/auth/token/tidy`.
+  </Card>
+  <Card title="Request rate" icon="chart-line">
+    Track `vault.core.handle_request` throughput. Plan to add performance standby nodes or replicas when sustained request rates approach Vault's single-node limits.
+  </Card>
+  <Card title="Lease count" icon="clock">
+    Dynamic secrets create leases. Excessive lease accumulation causes slowdowns. Monitor with `vault list sys/leases/lookup/` and enforce reasonable TTLs.
+  </Card>
+</CardGroup>
+
+### Recommended alerts
+
+| Condition | Threshold | Severity |
+|-----------|-----------|----------|
+| Vault sealed | Any sealed node | Critical |
+| `vault.raft.leader.lastContact` | > 500ms | Warning |
+| `vault.runtime.alloc_bytes` | > 80% of available RAM | Warning |
+| Health endpoint status | Non-200 (active nodes) | Critical |
+| Audit device failure | Any | Critical |
+| Token count | > 1,000,000 | Warning |

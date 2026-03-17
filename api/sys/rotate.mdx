@@ -1,0 +1,98 @@
+---
+title: "sys/rotate"
+description: "Rotate Vault's encryption key and check the current key version status."
+---
+
+Vault uses an encryption key to encrypt all data in its storage backend. The `/sys/rotate` and `/sys/key-status` endpoints manage this encryption key.
+
+## Rotate Encryption Key
+
+Triggers a rotation of the backend encryption key. After rotation, new writes will be encrypted with the new key. Old data encrypted with previous keys is re-encrypted lazily over time.
+
+```
+POST /v1/sys/rotate
+```
+
+<Note>
+  This endpoint requires `sudo` capability.
+</Note>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X POST \
+  -H "X-Vault-Token: hvs.ROOT..." \
+  https://vault.example.com/v1/sys/rotate
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().Rotate()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Encryption key rotated successfully")
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Get Key Status
+
+Returns information about the current encryption key, including its version number, installation time, and number of encryptions performed.
+
+```
+GET /v1/sys/key-status
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/key-status
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+status, err := client.Sys().KeyStatus()
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Printf("Term: %d, Install time: %v, Encryptions: %d\n",
+    status.Term, status.InstallTime, status.Encryptions)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "data": {
+    "term": 3,
+    "install_time": "2024-01-15T10:30:00Z",
+    "encryptions": 42187
+  }
+}
+```
+
+<ResponseField name="term" type="integer">
+  The current key version (term). Starts at 1 and increments with each rotation.
+</ResponseField>
+
+<ResponseField name="install_time" type="string">
+  The time the current key was installed (RFC3339 format).
+</ResponseField>
+
+<ResponseField name="encryptions" type="integer">
+  The number of encryption operations performed with the current key.
+</ResponseField>
+
+<Tip>
+  Monitor `encryptions` and rotate the key proactively. Many security policies recommend rotating after a certain number of encryptions or on a regular schedule.
+</Tip>

@@ -1,0 +1,223 @@
+---
+title: "sys/policies"
+description: "List, read, write, and delete ACL policies in Vault."
+---
+
+Policies in Vault are HCL or JSON documents that grant permissions to paths. The `/sys/policies/acl` endpoints manage ACL policies.
+
+## List ACL Policies
+
+Returns a list of all ACL policy names.
+
+```
+GET /v1/sys/policies/acl?list=true
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  "https://vault.example.com/v1/sys/policies/acl?list=true"
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+policies, err := client.Sys().ListPolicies()
+if err != nil {
+    log.Fatal(err)
+}
+for _, name := range policies {
+    fmt.Println(name)
+}
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "data": {
+    "keys": ["default", "root", "my-app-policy"]
+  }
+}
+```
+
+<ResponseField name="data.keys" type="array">
+  List of ACL policy names.
+</ResponseField>
+
+---
+
+## Read ACL Policy
+
+Returns the rules (HCL/JSON) for the named policy.
+
+```
+GET /v1/sys/policies/acl/<name>
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/policies/acl/my-app-policy
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+rules, err := client.Sys().GetPolicy("my-app-policy")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(rules)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "data": {
+    "name": "my-app-policy",
+    "policy": "path \"secret/data/*\" {\n  capabilities = [\"read\"]\n}\n"
+  }
+}
+```
+
+<ResponseField name="data.name" type="string">
+  The name of the policy.
+</ResponseField>
+
+<ResponseField name="data.policy" type="string">
+  The raw HCL/JSON policy rules.
+</ResponseField>
+
+---
+
+## Write ACL Policy
+
+Creates or updates a named ACL policy.
+
+```
+PUT /v1/sys/policies/acl/<name>
+```
+
+### Request Parameters
+
+<ParamField body="policy" type="string" required>
+  The policy document in HCL or JSON format.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "policy": "path \"secret/data/my-app/*\" {\n  capabilities = [\"read\", \"list\"]\n}\n"
+  }' \
+  https://vault.example.com/v1/sys/policies/acl/my-app-policy
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+rules := `
+path "secret/data/my-app/*" {
+  capabilities = ["read", "list"]
+}
+
+path "secret/metadata/my-app/*" {
+  capabilities = ["list"]
+}
+`
+err := client.Sys().PutPolicy("my-app-policy", rules)
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Delete ACL Policy
+
+Deletes the named ACL policy. Tokens assigned this policy will lose the access it granted.
+
+```
+DELETE /v1/sys/policies/acl/<name>
+```
+
+<Warning>
+  Deleting the `default` or `root` policies is not allowed.
+</Warning>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X DELETE \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/policies/acl/my-app-policy
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().DeletePolicy("my-app-policy")
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Policy HCL Format
+
+Policies are written in HCL and grant access to paths using capability lists.
+
+```hcl
+# Grant read access to all secrets under my-app/
+path "secret/data/my-app/*" {
+  capabilities = ["read", "list"]
+}
+
+# Allow creating and updating tokens with a specific role
+path "auth/token/create/my-role" {
+  capabilities = ["update"]
+}
+
+# Allow renewing own token
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
+
+# Allow PKI cert issuance
+path "pki/issue/my-role" {
+  capabilities = ["create", "update"]
+}
+```
+
+### Capabilities
+
+| Capability | HTTP Methods | Description |
+|------------|-------------|-------------|
+| `create` | PUT/POST | Create new data |
+| `read` | GET | Read existing data |
+| `update` | PUT/POST | Update existing data |
+| `delete` | DELETE | Delete data |
+| `list` | LIST/GET?list=true | List keys |
+| `sudo` | Any | Access root-protected paths |
+| `deny` | Any | Explicitly deny access |
+| `patch` | PATCH | Partial update |

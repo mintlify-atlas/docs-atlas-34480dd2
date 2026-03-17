@@ -1,0 +1,68 @@
+---
+title: "HashiCorp Vault"
+description: "Secrets management, encryption as a service, and privileged access management"
+---
+
+<img
+  className="block"
+  src="https://media.brand.dev/c0e3d4ff-bfbb-416c-ab8e-a654c3c04103.svg"
+  alt="HashiCorp Vault"
+  style={{ height: "60px", marginBottom: "2rem" }}
+/>
+
+## What is Vault?
+
+Vault is a tool for securely accessing **secrets**. A secret is anything you want to tightly control access to — API keys, passwords, certificates, encryption keys, and more. Vault provides a unified interface to any secret while providing tight access control and recording a detailed audit log.
+
+Modern systems require access to a multitude of secrets: database credentials, API keys for external services, credentials for service-oriented architecture communication, and more. Understanding who is accessing what secrets is already very difficult and platform-specific. Adding key rolling, secure storage, and detailed audit logs is nearly impossible without a custom solution. This is where Vault steps in.
+
+## Key features
+
+<CardGroup cols={2}>
+  <Card title="Secure Secret Storage" icon="lock">
+    Store arbitrary key/value pairs with encryption at rest. Vault encrypts data before writing to persistent storage — gaining access to raw storage is never enough to access your secrets.
+  </Card>
+  <Card title="Dynamic Secrets" icon="bolt">
+    Generate secrets on-demand for AWS, SQL databases, and more. Vault creates credentials with valid permissions on demand and automatically revokes them after the lease expires.
+  </Card>
+  <Card title="Data Encryption" icon="shield">
+    Encrypt and decrypt data without storing it. Security teams define encryption parameters and developers store encrypted data without designing their own encryption methods.
+  </Card>
+  <Card title="Leasing & Renewal" icon="clock">
+    Every secret has a lease. At the end of the lease, Vault automatically revokes the secret. Clients can renew leases via built-in renew APIs.
+  </Card>
+  <Card title="Secret Revocation" icon="ban">
+    Revoke not just a single secret, but entire trees of secrets — all secrets read by a specific user, or all secrets of a particular type.
+  </Card>
+  <Card title="Auth Methods" icon="key">
+    Authenticate using tokens, AppRole, AWS IAM, GitHub, LDAP, TLS certificates, Kubernetes, and more. Vault supports multiple auth methods simultaneously.
+  </Card>
+  <Card title="ACL Policies" icon="shield-halved">
+    Fine-grained access control with HCL-based policies. Control which paths can be read, written, deleted, and listed per role or user.
+  </Card>
+  <Card title="Audit Logging" icon="file-lines">
+    Every interaction with Vault is logged to one or more audit devices. Tamper-evident logs with HMAC-SHA256 hashing for compliance and forensics.
+  </Card>
+</CardGroup>
+
+## Get started
+
+<CardGroup cols={3}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Install Vault and store your first secret in minutes
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/concepts/architecture">
+    Understand how Vault works under the hood
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/cli/overview">
+    Full reference for all Vault CLI commands
+  </Card>
+</CardGroup>
+
+## Version
+
+This documentation covers **Vault v1.22.0-beta1**. Vault follows semantic versioning. For previous versions, consult the [CHANGELOG](https://github.com/hashicorp/vault/blob/main/CHANGELOG.md).
+
+<Note>
+  Vault is available in both open source (Community) and Enterprise editions. Features marked with an Enterprise badge require a Vault Enterprise license.
+</Note>

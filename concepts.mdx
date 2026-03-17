@@ -1,0 +1,57 @@
+---
+title: "Core concepts"
+description: "Understand the fundamental concepts that underpin how Vault works."
+---
+
+Vault is built around a small number of well-defined concepts. Understanding them will help you make good decisions about how to deploy, configure, and use Vault effectively.
+
+## What is a secret?
+
+A secret is any piece of data that you want to control access to tightly: database credentials, API keys, TLS certificates, SSH keys, passwords, or any other sensitive value. Vault provides a unified interface to manage all of these, encrypts everything before writing to persistent storage, and maintains a detailed audit log of every access.
+
+## Concepts overview
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="building" href="/concepts/architecture">
+    How Vault is structured internally — the barrier, backends, auth methods, secrets engines, and the request router.
+  </Card>
+  <Card title="Seal and unseal" icon="lock" href="/concepts/seal-unseal">
+    Why Vault starts in a sealed state, how Shamir's Secret Sharing is used to protect the root key, and how auto-unseal works.
+  </Card>
+  <Card title="Tokens" icon="key" href="/concepts/tokens">
+    Vault's core authentication primitive. How tokens are created, their TTLs, hierarchies, and how they map to policies.
+  </Card>
+  <Card title="Policies" icon="shield" href="/concepts/policies">
+    HCL-based access control policies that define which paths a token is permitted to read, write, list, or delete.
+  </Card>
+  <Card title="Namespaces" icon="folder" href="/concepts/namespaces">
+    Multi-tenancy in Vault Enterprise. Isolated environments with their own policies, auth methods, and secrets engines.
+  </Card>
+  <Card title="Leases" icon="clock" href="/concepts/leases">
+    Every dynamic secret and token has a lease. Understand TTLs, renewal, and revocation.
+  </Card>
+</CardGroup>
+
+## How the pieces fit together
+
+When a client makes a request to Vault:
+
+1. The request arrives at a **listener** (TCP by default on port 8200) and passes through the **barrier** — Vault's encrypted boundary.
+2. Vault authenticates the request using an **auth method** (token, AWS, Kubernetes, LDAP, etc.) and resolves it to an identity.
+3. That identity maps to one or more **policies** which specify what paths the identity can access and with which capabilities (`read`, `write`, `delete`, `list`, `sudo`).
+4. If authorized, the request is routed to the appropriate **secrets engine** (KV, PKI, AWS, database, etc.) or system backend.
+5. A response is returned, and the operation is recorded in the **audit log**.
+
+Vault never stores the root key directly. On initialization, a root key is generated in memory, split into _n_ key shares using Shamir's Secret Sharing, and distributed to operators. At least _t_ of those shares must be provided on each restart to reconstruct the root key and unseal Vault.
+
+## Key features
+
+**Secure secret storage** — Vault encrypts data before writing it to the storage backend. Access to the underlying storage (Consul, Raft, a filesystem) is not sufficient to read secrets.
+
+**Dynamic secrets** — For supported backends like AWS and databases, Vault generates short-lived credentials on demand and revokes them automatically when the lease expires.
+
+**Data encryption** — The Transit secrets engine encrypts and decrypts data without storing it, functioning as an encryption-as-a-service layer.
+
+**Leasing and renewal** — Every secret has a TTL. Clients can renew leases before expiry; Vault revokes them automatically when they expire.
+
+**Revocation** — Vault can revoke individual secrets, all secrets for a given token, or all secrets under a path prefix — useful for incident response and key rotation.

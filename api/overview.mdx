@@ -1,0 +1,211 @@
+---
+title: "API Overview"
+description: "An overview of the Vault HTTP API — base URL, authentication, request/response formats, pagination, and error handling."
+---
+
+Vault has an HTTP API that can be used to control every aspect of Vault. The Vault CLI uses this API under the hood. The API is RESTful and uses JSON for input and output.
+
+## Base URL
+
+All API routes are prefixed with `/v1/`.
+
+```
+https://vault.example.com/v1/<path>
+```
+
+The default address is `https://127.0.0.1:8200`.
+
+## Authentication
+
+All requests must be authenticated with a Vault token. Pass the token in the `X-Vault-Token` header:
+
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/secret/data/my-secret
+```
+
+You can set the token via the `VAULT_TOKEN` environment variable when using the Go SDK:
+
+```go
+config := vault.DefaultConfig()
+client, err := vault.NewClient(config)
+if err != nil {
+    log.Fatal(err)
+}
+// VAULT_TOKEN env var is picked up automatically,
+// or set it explicitly:
+client.SetToken("hvs.CAESIJ...")
+```
+
+## Namespaces
+
+For Vault Enterprise, specify the target namespace with the `X-Vault-Namespace` header:
+
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "X-Vault-Namespace: team-a/" \
+  https://vault.example.com/v1/secret/data/my-secret
+```
+
+In the Go SDK:
+
+```go
+client.SetNamespace("team-a/")
+// or for a single request:
+namespacedClient := client.WithNamespace("team-a/")
+```
+
+## Request Format
+
+Request bodies must be JSON-encoded. Set the `Content-Type: application/json` header when sending a body.
+
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"password": "s3cr3t"}}' \
+  https://vault.example.com/v1/secret/data/my-secret
+```
+
+## Response Format
+
+All responses are JSON. A successful read response has this shape:
+
+```json
+{
+  "request_id": "f00341c1-fad5-f6e6-13fd-235617f858ab",
+  "lease_id": "",
+  "renewable": false,
+  "lease_duration": 0,
+  "data": {
+    "key": "value"
+  },
+  "wrap_info": null,
+  "warnings": null,
+  "auth": null
+}
+```
+
+<ResponseField name="request_id" type="string">
+  The unique ID of the request.
+</ResponseField>
+
+<ResponseField name="lease_id" type="string">
+  The lease ID, if applicable.
+</ResponseField>
+
+<ResponseField name="renewable" type="boolean">
+  Whether the lease can be renewed.
+</ResponseField>
+
+<ResponseField name="lease_duration" type="integer">
+  Time in seconds before the lease expires.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  The secret payload. Format varies by secrets engine.
+</ResponseField>
+
+<ResponseField name="warnings" type="array">
+  Non-fatal warnings from the server.
+</ResponseField>
+
+<ResponseField name="auth" type="object">
+  Present only on login responses. Contains `client_token`, `policies`, and `lease_duration`.
+</ResponseField>
+
+## Error Format
+
+Errors are returned as a JSON object with an `errors` array:
+
+```json
+{"errors": ["1 error occurred: permission denied"]}
+```
+
+## HTTP Status Codes
+
+| Code | Meaning |
+|------|---------|
+| `200` | Success, response body contains data |
+| `204` | Success, no response body |
+| `400` | Invalid request — malformed JSON, missing fields |
+| `403` | Forbidden — token has insufficient permissions |
+| `404` | Path not found or no data at the given path |
+| `429` | Rate limit exceeded (or standby node) |
+| `500` | Internal server error |
+| `502` | Downstream error |
+| `503` | Vault is sealed or in maintenance mode |
+
+## Pagination (List Operations)
+
+Endpoints that support listing accept a `list=true` query parameter or use the `LIST` HTTP method. The response contains a `data.keys` array:
+
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  "https://vault.example.com/v1/secret/metadata?list=true"
+```
+
+```json
+{
+  "data": {
+    "keys": ["secret-a", "secret-b", "dir/"]
+  }
+}
+```
+
+Keys ending in `/` are subdirectories.
+
+## Lease TTL Headers
+
+Vault may include lease information in response headers:
+
+| Header | Description |
+|--------|-------------|
+| `X-Vault-Index` | Used for read-your-writes consistency in replication |
+| `X-Vault-Forward` | Force a request to the primary cluster |
+| `X-Vault-Inconsistent` | Behavior when consistency cannot be achieved |
+
+When creating a token or lease, set a wrap TTL to receive a wrapped response:
+
+```bash
+curl -H "X-Vault-Wrap-TTL: 60" ...
+```
+
+## Rate Limiting
+
+Vault can enforce rate limits via the `VAULT_RATE_LIMIT` environment variable. The format is `rate:burst` (e.g., `10:20`) or just a rate (e.g., `10`). When the limit is exceeded, Vault returns `429 Too Many Requests`.
+
+In the Go SDK, configure the rate limiter:
+
+```go
+client.SetLimiter(10, 20) // rate=10 req/s, burst=20
+```
+
+## Environment Variables
+
+The Go SDK client reads the following environment variables automatically via `DefaultConfig()`:
+
+| Variable | Description |
+|----------|-------------|
+| `VAULT_ADDR` | Address of the Vault server (default: `https://127.0.0.1:8200`) |
+| `VAULT_TOKEN` | Authentication token |
+| `VAULT_NAMESPACE` | Default namespace for all requests |
+| `VAULT_CACERT` | Path to a PEM-encoded CA certificate file |
+| `VAULT_CACERT_BYTES` | PEM-encoded CA certificate as bytes |
+| `VAULT_CAPATH` | Path to directory of PEM-encoded CA cert files |
+| `VAULT_CLIENT_CERT` | Path to client certificate for mTLS |
+| `VAULT_CLIENT_KEY` | Path to client key for mTLS |
+| `VAULT_SKIP_VERIFY` | Skip TLS verification (`true`/`false`) |
+| `VAULT_TLS_SERVER_NAME` | Override SNI hostname for TLS |
+| `VAULT_MAX_RETRIES` | Number of retries on 5xx errors (default: `2`) |
+| `VAULT_CLIENT_TIMEOUT` | Timeout for HTTP requests (default: `60s`) |
+| `VAULT_RATE_LIMIT` | Rate limit in `rate:burst` format |
+| `VAULT_HTTP_PROXY` | HTTP proxy URL |
+| `VAULT_PROXY_ADDR` | HTTP proxy URL (supersedes `VAULT_HTTP_PROXY`) |
+| `VAULT_DISABLE_REDIRECTS` | Disable automatic redirect following |
+| `VAULT_HEADERS` | JSON object of extra headers to include |
+| `VAULT_AGENT_ADDR` | Address of a local Vault Agent |

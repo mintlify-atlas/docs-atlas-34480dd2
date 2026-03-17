@@ -1,0 +1,98 @@
+---
+title: "vault status"
+description: "Print the current seal and HA status of a Vault server, regardless of whether it is sealed."
+---
+
+## Overview
+
+The `vault status` command prints the current state of Vault including whether it is sealed and if HA mode is enabled. This command prints output regardless of whether Vault is sealed.
+
+```
+Usage: vault status [options]
+```
+
+## Exit Codes
+
+The exit code from `vault status` reflects the seal state:
+
+| Exit Code | Meaning |
+|---|---|
+| `0` | Vault is unsealed |
+| `1` | An error occurred |
+| `2` | Vault is sealed |
+
+<Tip>
+  Use the exit code in scripts to check seal state without parsing output:
+
+  ```bash
+  vault status > /dev/null 2>&1
+  if [ $? -eq 2 ]; then
+    echo "Vault is sealed"
+  fi
+  ```
+</Tip>
+
+## Flags
+
+<ParamField path="-format" type="string" default="table">
+  Output format. One of `table`, `json`, or `yaml`.
+</ParamField>
+
+## Example Output
+
+```
+Key             Value
+---             -----
+Seal Type       shamir
+Initialized     true
+Sealed          false
+Total Shares    5
+Threshold       3
+Version         1.15.0
+Build Date      2023-08-23T00:00:00Z
+Storage Type    raft
+Cluster Name    vault-cluster-a1b2c3d4
+Cluster ID      e5f6g7h8-...
+HA Enabled      true
+HA Cluster      https://127.0.0.1:8201
+HA Mode         active
+Active Since    2023-08-23T10:00:00.000000000Z
+```
+
+### Sealed output
+
+```
+Key                Value
+---                -----
+Seal Type          shamir
+Initialized        true
+Sealed             true
+Total Shares       5
+Threshold          3
+Unseal Progress    2/3
+Unseal Nonce       d3d06528-...
+Version            1.15.0
+Build Date         2023-08-23T00:00:00Z
+Storage Type       raft
+HA Enabled         true
+```
+
+## Examples
+
+```bash
+# Default table output
+vault status
+
+# JSON output (useful for scripting)
+vault status -format=json
+
+# YAML output
+vault status -format=yaml
+
+# Check if Vault is unsealed (exit code 0 = unsealed)
+vault status && echo "Vault is ready"
+```
+
+<Note>
+  `vault status` always queries the root namespace regardless of any `-namespace` flag or `VAULT_NAMESPACE` environment variable, because the seal status endpoint is only available in the root namespace before Vault is unsealed.
+</Note>

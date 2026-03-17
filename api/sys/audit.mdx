@@ -1,0 +1,259 @@
+---
+title: "sys/audit"
+description: "List, enable, disable audit devices, and hash audit inputs."
+---
+
+Audit devices are plugins that keep a detailed log of all requests and responses to Vault. The `/sys/audit` endpoints manage these devices.
+
+## List Audit Devices
+
+Returns all enabled audit devices.
+
+```
+GET /v1/sys/audit
+```
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/audit
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+devices, err := client.Sys().ListAudit()
+if err != nil {
+    log.Fatal(err)
+}
+for path, device := range devices {
+    fmt.Printf("%s => type=%s\n", path, device.Type)
+}
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+Returns a map of audit device path to `Audit` objects.
+
+```json
+{
+  "file/": {
+    "path": "file/",
+    "type": "file",
+    "description": "File audit log",
+    "options": {
+      "file_path": "/var/log/vault/audit.log",
+      "log_raw": "false"
+    },
+    "local": false
+  }
+}
+```
+
+<ResponseField name="path" type="string">
+  The path where this audit device is mounted.
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  The type of audit device: `file`, `syslog`, or `socket`.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description.
+</ResponseField>
+
+<ResponseField name="options" type="object">
+  Device-specific options map.
+</ResponseField>
+
+<ResponseField name="local" type="boolean">
+  If `true`, this device is local to the cluster and not replicated.
+</ResponseField>
+
+---
+
+## Enable Audit Device
+
+Enables an audit device at the specified path.
+
+```
+PUT /v1/sys/audit/<path>
+```
+
+<Note>
+  This endpoint requires `sudo` capability.
+</Note>
+
+### Request Parameters
+
+<ParamField body="type" type="string" required>
+  The type of audit device: `file`, `syslog`, or `socket`.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Human-readable description.
+</ParamField>
+
+<ParamField body="local" type="boolean">
+  If `true`, this device is local only and not replicated.
+</ParamField>
+
+<ParamField body="options" type="object">
+  Device-specific configuration options.
+  <Expandable title="File options">
+    <ParamField body="file_path" type="string">
+      Path to the log file, or `stdout` / `discard`.
+    </ParamField>
+    <ParamField body="log_raw" type="boolean">
+      If `true`, log values as plaintext instead of HMAC'd.
+    </ParamField>
+    <ParamField body="hmac_accessor" type="boolean">
+      If `false`, do not HMAC token accessor values.
+    </ParamField>
+    <ParamField body="mode" type="string">
+      File mode (octal string, e.g., `"0600"`).
+    </ParamField>
+    <ParamField body="format" type="string">
+      Log format: `json` (default) or `jsonx`.
+    </ParamField>
+    <ParamField body="prefix" type="string">
+      A string prefix prepended to each log line.
+    </ParamField>
+  </Expandable>
+  <Expandable title="Socket options">
+    <ParamField body="address" type="string">
+      Socket address to write to.
+    </ParamField>
+    <ParamField body="socket_type" type="string">
+      Socket type: `tcp` or `udp`.
+    </ParamField>
+  </Expandable>
+  <Expandable title="Syslog options">
+    <ParamField body="facility" type="string">
+      Syslog facility (e.g., `AUTH`, `LOCAL0`).
+    </ParamField>
+    <ParamField body="tag" type="string">
+      Syslog tag string.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+# Enable a file audit device
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "file",
+    "description": "File audit log",
+    "options": {
+      "file_path": "/var/log/vault/audit.log"
+    }
+  }' \
+  https://vault.example.com/v1/sys/audit/file
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().EnableAuditWithOptions("file", &api.EnableAuditOptions{
+    Type:        "file",
+    Description: "File audit log",
+    Options: map[string]string{
+        "file_path": "/var/log/vault/audit.log",
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Disable Audit Device
+
+Disables the audit device at the given path.
+
+```
+DELETE /v1/sys/audit/<path>
+```
+
+<Warning>
+  Vault will block requests if all audit devices fail. Ensure at least one audit device remains functional.
+</Warning>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X DELETE \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  https://vault.example.com/v1/sys/audit/file
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+err := client.Sys().DisableAudit("file")
+if err != nil {
+    log.Fatal(err)
+}
+```
+  </Tab>
+</Tabs>
+
+Returns `204 No Content` on success.
+
+---
+
+## Hash Audit Input
+
+Hashes a string value using the audit device's configured HMAC key. Useful for looking up values in audit logs without exposing the raw value.
+
+```
+PUT /v1/sys/audit-hash/<path>
+```
+
+<ParamField body="input" type="string" required>
+  The input value to HMAC.
+</ParamField>
+
+<Tabs>
+  <Tab title="curl">
+```bash
+curl \
+  -X PUT \
+  -H "X-Vault-Token: hvs.CAESIJ..." \
+  -H "Content-Type: application/json" \
+  -d '{"input": "my-token-value"}' \
+  https://vault.example.com/v1/sys/audit-hash/file
+```
+  </Tab>
+  <Tab title="Go SDK">
+```go
+hash, err := client.Sys().AuditHash("file", "my-token-value")
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("HMAC'd value:", hash)
+```
+  </Tab>
+</Tabs>
+
+### Response
+
+```json
+{
+  "data": {
+    "hash": "hmac-sha256:abc123..."
+  }
+}
+```

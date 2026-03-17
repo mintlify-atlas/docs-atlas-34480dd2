@@ -1,0 +1,199 @@
+---
+title: "Namespaces"
+description: "How Vault namespaces provide isolated multi-tenant Vault instances within a single cluster."
+---
+
+Namespaces are a Vault Enterprise feature that enable multi-tenancy. Each namespace is an isolated Vault environment with its own auth methods, secret engines, policies, tokens, and identity entities — all within a single Vault cluster. Teams or tenants interact with their namespace as if it were a dedicated Vault deployment.
+
+<Note>
+  Namespaces are available in Vault Enterprise only. The open-source version of Vault contains stub implementations (see `vault/namespaces.go`) that always resolve to the root namespace.
+</Note>
+
+## What namespaces provide
+
+<CardGroup cols={2}>
+  <Card title="Isolated auth methods" icon="user-check">
+    Each namespace can enable its own auth methods independently. A token issued by `ns1/auth/kubernetes` is completely separate from a token issued by `ns2/auth/kubernetes`.
+  </Card>
+  <Card title="Isolated secret engines" icon="key">
+    Secret engines mounted in a namespace are not visible or accessible from sibling namespaces. Paths like `ns1/secret/` and `ns2/secret/` are independent.
+  </Card>
+  <Card title="Isolated policies" icon="file-text">
+    Policies in a namespace apply only within that namespace. A policy named `admin` in `ns1/` is a different policy from `admin` in `ns2/`.
+  </Card>
+  <Card title="Isolated identity" icon="users">
+    Entities, groups, and aliases created in a namespace are scoped to that namespace. Cross-namespace identity is managed through group membership.
+  </Card>
+</CardGroup>
+
+## The root namespace
+
+The root namespace is the top-level namespace that always exists. Its ID is defined in the namespace helper:
+
+```go
+// From vault/namespaces.go
+func namespaceByID(ctx context.Context, nsID string, c *Core) (*namespace.Namespace, error) {
+    if nsID == namespace.RootNamespaceID {
+        return namespace.RootNamespace, nil
+    }
+    return nil, namespace.ErrNoNamespace
+}
+```
+
+All operations without a namespace header or environment variable operate in the root namespace. Resources in the root namespace are accessible by root namespace tokens only (namespace hierarchy rules apply).
+
+## Namespace hierarchy
+
+Namespaces can be nested to create a hierarchy:
+
+```
+root/
+  ├── finance/
+  │     ├── us/
+  │     └── emea/
+  └── engineering/
+        ├── frontend/
+        └── backend/
+```
+
+A parent namespace operator can manage child namespaces, but a child namespace operator cannot access the parent. This delegation model allows a central platform team to create and manage top-level namespaces while individual teams self-serve within their own.
+
+Policies applied at a parent namespace can cascade into child namespaces via group membership. The group policy application mode is configurable:
+
+```go
+// From vault/core.go
+groupPolicyApplicationModeWithinNamespaceHierarchy = "within_namespace_hierarchy"
+groupPolicyApplicationModeAny                      = "any"
+```
+
+- `within_namespace_hierarchy` (default): group policies from parent namespaces apply to child namespace tokens
+- `any`: group policies apply regardless of namespace hierarchy
+
+## Targeting a namespace
+
+You can target a namespace using either an environment variable or an HTTP header.
+
+<Tabs>
+  <Tab title="Environment variable">
+    ```bash
+    export VAULT_NAMESPACE="finance/us"
+    vault secrets list
+    vault kv put secret/myapp key=value
+    ```
+  </Tab>
+  <Tab title="HTTP header">
+    ```bash
+    curl \
+      -H "X-Vault-Token: $VAULT_TOKEN" \
+      -H "X-Vault-Namespace: finance/us" \
+      https://vault.example.com/v1/secret/data/myapp
+    ```
+  </Tab>
+  <Tab title="API path prefix">
+    ```bash
+    # Namespace can also be prefixed in the path
+    vault kv put finance/us/secret/myapp key=value
+    ```
+  </Tab>
+</Tabs>
+
+## Creating and managing namespaces
+
+<Steps>
+  <Step title="Create a namespace">
+    ```bash
+    # Create a top-level namespace
+    vault namespace create finance
+
+    # Create a child namespace
+    vault namespace create -namespace=finance us
+    ```
+  </Step>
+  <Step title="List namespaces">
+    ```bash
+    vault namespace list
+
+    # List child namespaces within a parent
+    VAULT_NAMESPACE=finance vault namespace list
+    ```
+  </Step>
+  <Step title="Enable auth methods and secret engines in the namespace">
+    ```bash
+    export VAULT_NAMESPACE=finance/us
+
+    vault auth enable kubernetes
+    vault secrets enable -path=secret kv-v2
+    ```
+  </Step>
+  <Step title="Create namespace-scoped policies">
+    ```bash
+    export VAULT_NAMESPACE=finance/us
+
+    vault policy write finance-us-admin - <<EOF
+    path "secret/*" {
+      capabilities = ["create", "read", "update", "delete", "list"]
+    }
+    EOF
+    ```
+  </Step>
+  <Step title="Create tokens within the namespace">
+    ```bash
+    export VAULT_NAMESPACE=finance/us
+
+    vault token create -policy=finance-us-admin
+    ```
+  </Step>
+</Steps>
+
+## Namespace-scoped tokens
+
+Tokens are always scoped to the namespace in which they were created. The `NamespaceID` field on `TokenEntry` records this:
+
+```go
+// From sdk/logical/token.go
+// NamespaceID is the identifier of the namespace to which this token is
+// confined to.
+NamespaceID string
+```
+
+A token from `finance/us` cannot access paths in `finance/emea` or the root namespace, even if the token has broad policies within its own namespace.
+
+## Use cases
+
+<AccordionGroup>
+  <Accordion title="Tenant isolation (SaaS platforms)">
+    Each customer gets their own namespace. Customers can manage their own secrets, auth methods, and policies without any cross-tenant visibility. A single Vault cluster serves hundreds of tenants.
+  </Accordion>
+  <Accordion title="Team separation (internal platform)">
+    Engineering teams get namespaces under a central `teams/` hierarchy. A platform team manages the top-level namespace and creates per-team namespaces. Each team self-serves within their namespace.
+  </Accordion>
+  <Accordion title="Environment separation">
+    Create `production/`, `staging/`, and `development/` namespaces within a shared cluster. Each environment has its own auth methods and secret engines, preventing accidental cross-environment access.
+  </Accordion>
+  <Accordion title="Delegated administration">
+    Issue a namespace-admin token that can create and manage child namespaces, auth methods, and secret engines but cannot affect sibling or parent namespaces. This enables safe delegation without sharing root tokens.
+  </Accordion>
+</AccordionGroup>
+
+## Namespace paths in policies
+
+When writing policies for use within a namespace, paths are relative to that namespace. You do not need to prefix paths with the namespace name:
+
+```hcl
+# Policy applied in the finance/us namespace
+# This controls access to finance/us/secret/data/myapp
+path "secret/data/myapp" {
+  capabilities = ["read"]
+}
+```
+
+From `vault/policy.go`, the namespace path is prepended to all policy paths internally:
+
+```go
+// Ensure we are using the full request path internally
+pc.Path = result.namespace.Path + pc.Path
+```
+
+<Warning>
+  Tokens with root namespace privileges can access resources in any namespace. Protect root tokens carefully and prefer namespace-scoped tokens for all operational tasks.
+</Warning>

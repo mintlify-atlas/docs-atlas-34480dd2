@@ -1,0 +1,256 @@
+---
+title: "Go SDK: Client"
+description: "Configure and initialize the Vault Go SDK client using api.NewClient and api.DefaultConfig."
+---
+
+The Vault Go SDK is available at `github.com/hashicorp/vault/api`. The `Client` struct is the primary entry point for all API interactions.
+
+## Installation
+
+```bash
+go get github.com/hashicorp/vault/api
+```
+
+## Creating a Client
+
+```go
+import vault "github.com/hashicorp/vault/api"
+
+// Use DefaultConfig which reads environment variables
+config := vault.DefaultConfig()
+client, err := vault.NewClient(config)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### `api.DefaultConfig() *Config`
+
+Returns a `*Config` pre-populated with defaults and values from environment variables. It's the recommended starting point.
+
+**Defaults:**
+- `Address`: `https://127.0.0.1:8200` (overridden by `VAULT_ADDR`)
+- `Timeout`: 60 seconds (overridden by `VAULT_CLIENT_TIMEOUT`)
+- `MaxRetries`: 2 (overridden by `VAULT_MAX_RETRIES`)
+- `MinRetryWait`: 1000ms
+- `MaxRetryWait`: 1500ms
+
+### `api.NewClient(c *Config) (*Client, error)`
+
+Creates a new Vault client. Pass `nil` to use `DefaultConfig()`.
+
+```go
+// Explicit config
+client, err := vault.NewClient(&vault.Config{
+    Address: "https://vault.prod.example.com",
+})
+
+// Use DefaultConfig (reads environment variables)
+client, err = vault.NewClient(nil)
+```
+
+---
+
+## Config Struct
+
+```go
+type Config struct {
+    Address      string        // Vault server URL
+    AgentAddress string        // Vault Agent address
+    HttpClient   *http.Client  // Custom HTTP client
+    MinRetryWait time.Duration // Min wait between retries (default: 1s)
+    MaxRetryWait time.Duration // Max wait between retries (default: 1.5s)
+    MaxRetries   int           // Max retry attempts on 5xx (default: 2)
+    Timeout      time.Duration // Per-request timeout (default: 60s)
+    Limiter      *rate.Limiter // Rate limiter
+    SRVLookup    bool          // Enable DNS SRV lookup
+    CloneHeaders bool          // Copy headers to cloned clients
+    CloneToken   bool          // Copy token to cloned clients
+    ReadYourWrites bool        // Enable read-your-writes consistency
+    DisableRedirects bool      // Disable automatic redirect following
+}
+```
+
+### TLS Configuration
+
+```go
+config := vault.DefaultConfig()
+err := config.ConfigureTLS(&vault.TLSConfig{
+    CACert:        "/path/to/ca.pem",
+    ClientCert:    "/path/to/client.pem",
+    ClientKey:     "/path/to/client-key.pem",
+    TLSServerName: "vault.example.com",
+    Insecure:      false, // set true to skip TLS verification
+})
+if err != nil {
+    log.Fatal(err)
+}
+client, _ := vault.NewClient(config)
+```
+
+---
+
+## Environment Variables
+
+`DefaultConfig()` reads these environment variables automatically:
+
+| Variable | Config Field | Description |
+|----------|-------------|-------------|
+| `VAULT_ADDR` | `Address` | Vault server address |
+| `VAULT_AGENT_ADDR` | `AgentAddress` | Vault Agent address |
+| `VAULT_TOKEN` | *(client token)* | Authentication token |
+| `VAULT_NAMESPACE` | *(client header)* | Default namespace |
+| `VAULT_CACERT` | `TLSConfig.CACert` | Path to CA cert file |
+| `VAULT_CACERT_BYTES` | `TLSConfig.CACertBytes` | PEM-encoded CA cert |
+| `VAULT_CAPATH` | `TLSConfig.CAPath` | Path to CA cert directory |
+| `VAULT_CLIENT_CERT` | `TLSConfig.ClientCert` | Client certificate path |
+| `VAULT_CLIENT_KEY` | `TLSConfig.ClientKey` | Client key path |
+| `VAULT_SKIP_VERIFY` | `TLSConfig.Insecure` | Skip TLS verification |
+| `VAULT_TLS_SERVER_NAME` | `TLSConfig.TLSServerName` | TLS SNI server name |
+| `VAULT_MAX_RETRIES` | `MaxRetries` | Max retries on 5xx |
+| `VAULT_CLIENT_TIMEOUT` | `Timeout` | Request timeout |
+| `VAULT_RATE_LIMIT` | `Limiter` | Rate limit (`rate:burst` or `rate`) |
+| `VAULT_HTTP_PROXY` | *(transport proxy)* | HTTP proxy URL |
+| `VAULT_PROXY_ADDR` | *(transport proxy)* | HTTP proxy URL (takes precedence) |
+| `VAULT_DISABLE_REDIRECTS` | `DisableRedirects` | Disable HTTP redirects |
+| `VAULT_HEADERS` | *(client headers)* | JSON object of custom headers |
+
+---
+
+## Token Management
+
+```go
+// Set the token
+client.SetToken("hvs.CAESIJ...")
+
+// Get the current token
+token := client.Token()
+
+// Clear the token
+client.ClearToken()
+```
+
+---
+
+## Headers
+
+```go
+// Add a custom header to all requests
+client.AddHeader("X-Custom-Header", "value")
+
+// Replace all custom headers
+client.SetHeaders(http.Header{
+    "X-Custom-Header": []string{"value"},
+})
+
+// Get current headers (returns a copy)
+headers := client.Headers()
+```
+
+---
+
+## Namespace
+
+```go
+// Set namespace for all requests
+client.SetNamespace("team-a/")
+
+// Get current namespace
+ns := client.Namespace()
+
+// Remove namespace header
+client.ClearNamespace()
+
+// Create a scoped client with a specific namespace (does not modify the original)
+namespacedClient := client.WithNamespace("team-b/")
+```
+
+---
+
+## Cloning Clients
+
+```go
+// Clone with the same configuration
+cloned, err := client.Clone()
+
+// Clone and always include headers
+clonedWithHeaders, err := client.CloneWithHeaders()
+```
+
+---
+
+## Rate Limiting
+
+```go
+// Set rate limiter: 10 requests/sec, burst of 20
+client.SetLimiter(10.0, 20)
+
+// Or configure via environment variable:
+// VAULT_RATE_LIMIT=10:20
+```
+
+---
+
+## Retries and Timeouts
+
+```go
+// Set maximum retries on 5xx responses
+client.SetMaxRetries(3)
+
+// Set request timeout
+client.SetClientTimeout(30 * time.Second)
+
+// Set retry wait windows
+client.SetMinRetryWait(500 * time.Millisecond)
+client.SetMaxRetryWait(2 * time.Second)
+```
+
+---
+
+## Full Example
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "time"
+
+    vault "github.com/hashicorp/vault/api"
+)
+
+func main() {
+    config := vault.DefaultConfig()
+    // Override address if needed
+    config.Address = "https://vault.example.com"
+    config.Timeout = 30 * time.Second
+    config.MaxRetries = 3
+
+    // Configure TLS
+    if err := config.ConfigureTLS(&vault.TLSConfig{
+        CACert: "/etc/vault/ca.pem",
+    }); err != nil {
+        log.Fatal(err)
+    }
+
+    client, err := vault.NewClient(config)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    // Token set from VAULT_TOKEN or explicitly:
+    client.SetToken("hvs.CAESIJ...")
+
+    // Optional: set namespace for Vault Enterprise
+    client.SetNamespace("my-team/")
+
+    // Read a secret
+    secret, err := client.Logical().ReadWithContext(context.Background(), "secret/data/my-app")
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(secret.Data)
+}
+```

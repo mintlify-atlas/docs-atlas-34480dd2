@@ -1,0 +1,414 @@
+---
+title: "vault kv"
+description: "Read, write, delete, list, and manage secrets in Vault's KV secrets engine (v1 and v2)."
+---
+
+## Overview
+
+The `vault kv` command groups subcommands for interacting with Vault's Key/Value (KV) secrets engine. It supports both KV v1 and KV v2.
+
+```
+Usage: vault kv <subcommand> [options] [args]
+```
+
+| Subcommand | Description |
+|---|---|
+| `put` | Set or update data in the KV store |
+| `patch` | Patch (partially update) existing data |
+| `get` | Retrieve data from the KV store |
+| `list` | List keys in the KV store |
+| `delete` | Soft-delete versions in KV v2 |
+| `undelete` | Restore soft-deleted versions in KV v2 |
+| `destroy` | Permanently destroy specific versions |
+| `rollback` | Roll back to a prior version |
+| `enable-versioning` | Upgrade a KV v1 mount to KV v2 |
+| `metadata get` | Get metadata for a KV v2 key |
+| `metadata put` | Create or update metadata for a KV v2 key |
+| `metadata patch` | Patch metadata for a KV v2 key |
+| `metadata delete` | Delete all metadata and versions for a key |
+
+<Note>
+  The preferred syntax uses `-mount=<mount>` and then the secret path as a positional argument. The legacy `mount/path` syntax still works but may cause confusion for KV v2 where the actual API path includes `/data/`.
+</Note>
+
+---
+
+## vault kv put
+
+Writes the data to the given path in the key-value store.
+
+```
+Usage: vault kv put [options] KEY [DATA]
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted. If specified, the next argument will be interpreted as the secret path. If not specified, the next argument will be interpreted as the combined mount path and secret path, with `/data/` automatically appended between KV v2 secrets.
+</ParamField>
+
+<ParamField path="-cas" type="int" default="-1">
+  Specifies a Check-And-Set operation (KV v2 only). If not set, the write will be allowed. If set to `0`, a write will only be allowed if the key doesn't exist. If non-zero, the write will only be allowed if the key's current version matches the version specified.
+</ParamField>
+
+### Examples
+
+```bash
+# Write key=value pairs
+vault kv put -mount=secret foo bar=baz
+
+# Write multiple values
+vault kv put -mount=secret myapp username=admin password=secret
+
+# Legacy path syntax
+vault kv put secret/foo bar=baz
+
+# Write from a JSON file
+vault kv put -mount=secret foo @data.json
+
+# Write value from stdin
+echo "abcd1234" | vault kv put -mount=secret foo bar=-
+
+# Check-and-set: only write if version 1
+vault kv put -mount=secret -cas=1 foo bar=baz
+```
+
+---
+
+## vault kv patch
+
+Patch (partially update) existing data at a KV v2 path without overwriting other fields.
+
+```
+Usage: vault kv patch [options] KEY [DATA]
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+<ParamField path="-cas" type="int" default="-1">
+  Check-And-Set version number. See `vault kv put -cas` for details.
+</ParamField>
+
+<ParamField path="-method" type="string" default="patch">
+  Specifies which method to use for the patch: `patch` (HTTP PATCH via `sys/wrapping/wrap`) or `rw` (read-then-write).
+</ParamField>
+
+### Examples
+
+```bash
+# Update only the 'password' field without touching others
+vault kv patch -mount=secret myapp password=newpassword
+```
+
+---
+
+## vault kv get
+
+Retrieves the value from Vault's key-value store at the given key name.
+
+```
+Usage: vault kv get [options] KEY
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted. If specified, the next argument will be interpreted as the secret path.
+</ParamField>
+
+<ParamField path="-version" type="int" default="0">
+  If passed, the value at the given version number will be returned (KV v2 only).
+</ParamField>
+
+<ParamField path="-field" type="string">
+  Print only the value of the specified field.
+</ParamField>
+
+<ParamField path="-format" type="string" default="table">
+  Output format: `table`, `json`, or `yaml`.
+</ParamField>
+
+### Examples
+
+```bash
+# Get the latest version
+vault kv get -mount=secret foo
+
+# Get a specific version
+vault kv get -mount=secret -version=1 foo
+
+# Extract only the 'password' field
+vault kv get -mount=secret -field=password myapp
+
+# JSON output
+vault kv get -mount=secret -format=json foo
+
+# Legacy syntax
+vault kv get secret/foo
+```
+
+---
+
+## vault kv list
+
+Lists data from Vault's key-value store at the given path.
+
+```
+Usage: vault kv list [options] PATH
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+### Examples
+
+```bash
+vault kv list -mount=secret
+vault kv list -mount=secret my-app/
+vault kv list secret/my-app/
+```
+
+---
+
+## vault kv delete
+
+Deletes the data for the provided version and path. In KV v2, data is soft-deleted (marked as deleted) and can be undeleted. In KV v1, the data is permanently removed.
+
+```
+Usage: vault kv delete [options] PATH
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+<ParamField path="-versions" type="string">
+  Specifies the version numbers to delete (KV v2 only). Can be a comma-separated list or specified multiple times.
+</ParamField>
+
+### Examples
+
+```bash
+# Delete the latest version
+vault kv delete -mount=secret foo
+
+# Delete specific versions
+vault kv delete -mount=secret -versions=3 foo
+vault kv delete -mount=secret -versions=1,2 foo
+```
+
+---
+
+## vault kv undelete
+
+Restores the data for specific versions at the given path. Only applies to KV v2.
+
+```
+Usage: vault kv undelete [options] PATH
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+<ParamField path="-versions" type="string">
+  Specifies the version numbers to undelete.
+</ParamField>
+
+### Examples
+
+```bash
+vault kv undelete -mount=secret -versions=3 foo
+```
+
+---
+
+## vault kv destroy
+
+Permanently destroys specific versions of a secret. The data cannot be recovered. Only applies to KV v2.
+
+```
+Usage: vault kv destroy [options] PATH
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+<ParamField path="-versions" type="string">
+  Specifies the version numbers to permanently destroy.
+</ParamField>
+
+### Examples
+
+```bash
+vault kv destroy -mount=secret -versions=1,2,3 foo
+```
+
+---
+
+## vault kv rollback
+
+Rolls back to a prior version of the key at the given path. A new version with the contents of the specified version will be created. Only applies to KV v2.
+
+```
+Usage: vault kv rollback [options] PATH
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+<ParamField path="-version" type="int">
+  The version number to roll back to.
+</ParamField>
+
+### Examples
+
+```bash
+vault kv rollback -mount=secret -version=2 foo
+```
+
+---
+
+## vault kv enable-versioning
+
+Upgrades a KV v1 secrets engine mount to KV v2.
+
+```
+Usage: vault kv enable-versioning [options] PATH
+```
+
+<Warning>
+  This is a one-way operation. You cannot downgrade from KV v2 to KV v1.
+</Warning>
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+### Examples
+
+```bash
+vault kv enable-versioning secret/
+```
+
+---
+
+## vault kv metadata get
+
+Retrieves the metadata for the secret at the given path. Metadata includes all version information. Only applies to KV v2.
+
+```
+Usage: vault kv metadata get [options] PATH
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+### Examples
+
+```bash
+vault kv metadata get -mount=secret foo
+vault kv metadata get secret/foo
+```
+
+---
+
+## vault kv metadata put
+
+Creates or updates the metadata entry for the specified key path. Only applies to KV v2.
+
+```
+Usage: vault kv metadata put [options] PATH
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+<ParamField path="-cas-required" type="bool">
+  If set, all write requests to this key will require a Check-And-Set operation.
+</ParamField>
+
+<ParamField path="-delete-version-after" type="duration">
+  Duration after which all new versions written to this key should be automatically deleted. Specified as a Go duration string such as `3h25m19s`.
+</ParamField>
+
+<ParamField path="-max-versions" type="int">
+  Maximum number of versions to retain for this key. Older versions are automatically deleted. If not set, the mount default is used.
+</ParamField>
+
+<ParamField path="-custom-metadata" type="string">
+  Arbitrary key=value metadata to store alongside this key's versions. Can be specified multiple times.
+</ParamField>
+
+### Examples
+
+```bash
+# Set a max of 5 versions and auto-delete after 3 hours
+vault kv metadata put -mount=secret -max-versions=5 -delete-version-after=3h25m19s foo
+
+# Require CAS on all writes
+vault kv metadata put -mount=secret -cas-required=true foo
+
+# Add custom metadata labels
+vault kv metadata put -mount=secret -custom-metadata=owner=team-a foo
+```
+
+---
+
+## vault kv metadata patch
+
+Patches an existing metadata entry for the specified key path. Only updates the fields that are specified. Only applies to KV v2.
+
+```
+Usage: vault kv metadata patch [options] PATH
+```
+
+Accepts the same flags as `vault kv metadata put`.
+
+---
+
+## vault kv metadata delete
+
+Deletes all metadata and versions for the specified key path. This is a permanent operation that cannot be undone.
+
+```
+Usage: vault kv metadata delete [options] PATH
+```
+
+### Flags
+
+<ParamField path="-mount" type="string">
+  Specifies the path where the KV backend is mounted.
+</ParamField>
+
+### Examples
+
+```bash
+vault kv metadata delete -mount=secret foo
+vault kv metadata delete secret/foo
+```

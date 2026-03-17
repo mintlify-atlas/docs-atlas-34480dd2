@@ -1,0 +1,264 @@
+---
+title: "Token Auth Method"
+description: "The token auth method is built into Vault and is always available. Tokens are the core of Vault authentication."
+---
+
+The token auth method is the built-in, core authentication mechanism in Vault. All other auth methods ultimately produce a Vault token. Tokens are the fundamental unit of authentication and authorization in Vault.
+
+<Note>
+  The token auth method is always available at `auth/token`. It cannot be disabled or remounted.
+</Note>
+
+## Token types
+
+Vault supports two primary token types:
+
+- **Service tokens**: The default token type. Persisted to storage, renewable, and can have child tokens. Revoked when the parent is revoked.
+- **Batch tokens**: Encrypted blobs that carry authentication information. Lightweight, not persisted to storage, but not renewable. Ideal for high-volume use cases.
+
+## Root tokens
+
+Root tokens have the `root` policy attached, which grants unrestricted access to Vault. Root tokens should be revoked after use.
+
+```bash
+# Generate a root token (requires a quorum of unseal keys)
+vault operator generate-root
+
+# Revoke the root token after use
+vault token revoke <root-token>
+```
+
+<Warning>
+  Keep root tokens to a minimum. Use a root token only when absolutely necessary and revoke it immediately after use.
+</Warning>
+
+## Creating tokens
+
+<Steps>
+  <Step title="Create a basic token">
+    ```bash
+    vault token create
+    ```
+  </Step>
+  <Step title="Create a token with specific policies and TTL">
+    ```bash
+    vault token create \
+      -policy="dev-policy" \
+      -policy="read-secrets" \
+      -ttl="1h" \
+      -max-ttl="24h"
+    ```
+  </Step>
+  <Step title="Create an orphan token">
+    Orphan tokens have no parent and are not revoked when the creating token is revoked.
+    ```bash
+    vault token create -orphan
+    ```
+  </Step>
+  <Step title="Create a periodic token">
+    Periodic tokens have an infinite TTL as long as they are renewed within the period.
+    ```bash
+    vault token create -period="1h"
+    ```
+  </Step>
+</Steps>
+
+### Token creation parameters
+
+<ParamField path="id" type="string">
+  The ID of the client token. Can only be specified by a root token. The ID provided may not contain a `.`.
+</ParamField>
+
+<ParamField path="role_name" type="string">
+  The name of the token role. If used, the token will be created against the named role, which may override other parameters.
+</ParamField>
+
+<ParamField path="policies" type="string[]">
+  A list of policies for the token. This must be a subset of the policies belonging to the token making the request, unless root.
+</ParamField>
+
+<ParamField path="no_parent" type="boolean" default="false">
+  If true, the token will have no parent. Only root or sudo callers can create orphan tokens.
+</ParamField>
+
+<ParamField path="no_default_policy" type="boolean" default="false">
+  If true, the `default` policy will not be contained in the token's policy set.
+</ParamField>
+
+<ParamField path="renewable" type="boolean" default="true">
+  Set to false to disable the ability of the token to be renewed past its initial TTL.
+</ParamField>
+
+<ParamField path="ttl" type="string">
+  The TTL period of the token, provided as a Go duration string (e.g., `15m`, `1h`, `1h30m`).
+</ParamField>
+
+<ParamField path="type" type="string" default="service">
+  The type of token to create: `service` or `batch`.
+</ParamField>
+
+<ParamField path="explicit_max_ttl" type="string">
+  If set, the token cannot be renewed past this TTL value, regardless of the value set on the role.
+</ParamField>
+
+<ParamField path="display_name" type="string">
+  The display name of the token. Defaults to "token".
+</ParamField>
+
+<ParamField path="num_uses" type="number" default="0">
+  The maximum uses for the given token. This can be used to create a one-time-token or limited use token. The value of 0 has no limit.
+</ParamField>
+
+<ParamField path="period" type="string">
+  If specified, the token will be periodic; it will have no maximum TTL (unless `explicit_max_ttl` is also set) but every renewal will use the given period. Requires a root or sudo call.
+</ParamField>
+
+<ParamField path="entity_alias" type="string">
+  Name of the entity alias to associate with during token creation.
+</ParamField>
+
+## Token operations
+
+### Look up a token
+
+```bash
+# Look up your own token
+vault token lookup
+
+# Look up a specific token
+vault token lookup <token>
+
+# Look up by accessor (does not require the token itself)
+vault token lookup -accessor <accessor>
+```
+
+### Renew a token
+
+```bash
+# Renew your own token
+vault token renew
+
+# Renew with a specific increment
+vault token renew -increment=1h
+
+# Renew a specific token
+vault token renew <token>
+```
+
+### Revoke a token
+
+```bash
+# Revoke a token and all child tokens
+vault token revoke <token>
+
+# Revoke only the token itself, not its children
+vault token revoke -mode=orphan <token>
+
+# Revoke by accessor
+vault token revoke -accessor <accessor>
+```
+
+### Check capabilities
+
+```bash
+# Check what capabilities your token has on a path
+vault token capabilities secret/data/myapp
+
+# Check capabilities of a specific token
+vault token capabilities <token> secret/data/myapp
+```
+
+## Token roles
+
+Token roles allow you to create tokens with a fixed set of configurations, removing the need for callers to have root or sudo permissions.
+
+```bash
+# Create a token role
+vault write auth/token/roles/my-role \
+  allowed_policies="dev,ops" \
+  orphan=true \
+  token_period="24h"
+
+# Create a token using the role
+vault token create -role=my-role
+
+# List token roles
+vault list auth/token/roles
+```
+
+### Token role parameters
+
+<ParamField path="allowed_policies" type="string[]">
+  If set, specifies the policies which may be requested by the token. Policies not in this list may not be requested. If empty, all policies are allowed.
+</ParamField>
+
+<ParamField path="disallowed_policies" type="string[]">
+  If set, specifies the policies that will not be in the set of allowed policies. Mutually exclusive with `allowed_policies`.
+</ParamField>
+
+<ParamField path="orphan" type="boolean" default="false">
+  If true, tokens created against this role will be orphan tokens.
+</ParamField>
+
+<ParamField path="renewable" type="boolean" default="true">
+  Whether tokens created against this role will be renewable.
+</ParamField>
+
+<ParamField path="token_period" type="string">
+  If specified, tokens generated using this role will have a period (infinite TTL renewed at the given period).
+</ParamField>
+
+<ParamField path="token_explicit_max_ttl" type="string">
+  Provides a maximum lifetime for any tokens issued against this role, as a hard cap.
+</ParamField>
+
+<ParamField path="token_no_default_policy" type="boolean" default="false">
+  If true, the default policy will not be contained in the created token's policy set.
+</ParamField>
+
+<ParamField path="token_num_uses" type="number" default="0">
+  The maximum number of times a generated token may be used. 0 means unlimited.
+</ParamField>
+
+<ParamField path="token_bound_cidrs" type="string[]">
+  List of CIDR blocks; if set, specifies blocks of IP addresses which can authenticate successfully.
+</ParamField>
+
+<ParamField path="path_suffix" type="string">
+  If set, tokens created against this role will have the given suffix as part of their path in addition to the role name.
+</ParamField>
+
+<ParamField path="allowed_entity_aliases" type="string[]">
+  List of entity aliases allowed for this role. Supports globbing.
+</ParamField>
+
+## Orphan tokens
+
+By default, tokens are created as children of the token making the create request. When a parent token is revoked, all its child tokens are also revoked. Orphan tokens have no parent and survive the revocation of the token that created them.
+
+```bash
+# Create an orphan token
+vault token create -orphan -policy="app-policy" -ttl="24h"
+
+# Or use sudo to create via the API directly
+vault write auth/token/create-orphan \
+  policies="app-policy" \
+  ttl="24h"
+```
+
+<Tip>
+  Use orphan tokens for long-running services and background jobs where the token that bootstrapped the service may expire or be revoked.
+</Tip>
+
+## Logging in with a token
+
+```bash
+# Set the token directly
+export VAULT_TOKEN="hvs.CAESIBi..."
+
+# Or log in via the token method
+vault login hvs.CAESIBi...
+
+# Login without validating token metadata
+vault login token=hvs.CAESIBi... lookup=false
+```

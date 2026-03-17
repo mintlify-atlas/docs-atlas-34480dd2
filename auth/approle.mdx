@@ -1,0 +1,234 @@
+---
+title: "AppRole Auth Method"
+description: "The AppRole auth method allows machines and services to authenticate with Vault using a Role ID and Secret ID."
+---
+
+The AppRole auth method is designed for machine-to-machine authentication. Instead of human credentials, it uses a **Role ID** (like a username) and a **Secret ID** (like a password) to authenticate. This makes it well-suited for automated workflows, CI/CD pipelines, and microservices.
+
+## Enabling AppRole
+
+```bash
+vault auth enable approle
+```
+
+## Quick start
+
+<Steps>
+  <Step title="Enable the AppRole auth method">
+    ```bash
+    vault auth enable approle
+    ```
+  </Step>
+  <Step title="Create a role">
+    ```bash
+    vault write auth/approle/role/my-app \
+      token_policies="my-app-policy" \
+      token_ttl="1h" \
+      token_max_ttl="4h" \
+      secret_id_ttl="30m" \
+      secret_id_num_uses=10
+    ```
+  </Step>
+  <Step title="Fetch the Role ID">
+    The Role ID is a stable identifier you embed in your application configuration.
+    ```bash
+    vault read auth/approle/role/my-app/role-id
+    ```
+    ```json
+    {
+      "data": {
+        "role_id": "db02de05-fa39-4855-059b-67221c5c2f63"
+      }
+    }
+    ```
+  </Step>
+  <Step title="Generate a Secret ID">
+    Secret IDs are ephemeral credentials generated per deployment or invocation.
+    ```bash
+    vault write -f auth/approle/role/my-app/secret-id
+    ```
+    ```json
+    {
+      "data": {
+        "secret_id": "841771dc-11c9-bbc7-bcac-6a3945a69cd9",
+        "secret_id_accessor": "84896a0c-1347-aa90-a4f6-aca8b7558780",
+        "secret_id_ttl": 1800,
+        "secret_id_num_uses": 10
+      }
+    }
+    ```
+  </Step>
+  <Step title="Login">
+    ```bash
+    vault write auth/approle/login \
+      role_id="db02de05-fa39-4855-059b-67221c5c2f63" \
+      secret_id="841771dc-11c9-bbc7-bcac-6a3945a69cd9"
+    ```
+  </Step>
+</Steps>
+
+## Role configuration parameters
+
+The following parameters are set when creating or updating a role at `auth/approle/role/<role_name>`.
+
+### Secret ID constraints
+
+<ParamField path="bind_secret_id" type="boolean" default="true">
+  If set, requires the `secret_id` credential to be presented when logging in using this role. From `path_role.go`: "Impose secret_id to be presented when logging in using this role. Defaults to 'true'."
+</ParamField>
+
+<ParamField path="secret_id_bound_cidrs" type="string[]">
+  Comma-separated string or list of CIDR blocks. If set, specifies the blocks of IP addresses which can perform the login operation. Supersedes the deprecated `bound_cidr_list` parameter.
+</ParamField>
+
+<ParamField path="secret_id_num_uses" type="number" default="0">
+  Number of times a Secret ID can be used to access the role, after which the Secret ID expires. Defaults to 0, meaning unlimited use.
+</ParamField>
+
+<ParamField path="secret_id_ttl" type="string" default="0">
+  Duration after which the issued Secret ID expires. Defaults to 0, meaning no expiration.
+</ParamField>
+
+<ParamField path="local_secret_ids" type="boolean" default="false">
+  If set, the Secret IDs generated using this role will be cluster-local. This can only be set during role creation and cannot be changed later.
+</ParamField>
+
+### Token parameters
+
+<ParamField path="token_policies" type="string[]">
+  List of Vault policies to assign to the token issued on login.
+</ParamField>
+
+<ParamField path="token_ttl" type="string">
+  The incremental lifetime for generated tokens. If 0 or not set, the system default is used.
+</ParamField>
+
+<ParamField path="token_max_ttl" type="string">
+  The maximum lifetime for generated tokens. If 0 or not set, the system default is used.
+</ParamField>
+
+<ParamField path="token_num_uses" type="number" default="0">
+  Maximum number of times a generated token may be used. 0 means unlimited.
+</ParamField>
+
+<ParamField path="token_period" type="string">
+  If set, tokens issued will be periodic. The token will never expire as long as it is renewed within the period.
+</ParamField>
+
+<ParamField path="token_bound_cidrs" type="string[]">
+  List of CIDR blocks. If set, specifies the blocks of IP addresses which can use the returned token.
+</ParamField>
+
+<ParamField path="token_explicit_max_ttl" type="string">
+  If set, provides a hard cap on the lifetime of the token, even through renewals.
+</ParamField>
+
+<ParamField path="token_no_default_policy" type="boolean" default="false">
+  If set, the default policy will not be set on generated tokens.
+</ParamField>
+
+<ParamField path="token_type" type="string" default="default">
+  The type of token to generate: `service`, `batch`, or `default`.
+</ParamField>
+
+## Secret ID generation
+
+### Generate a new Secret ID
+
+```bash
+vault write -f auth/approle/role/my-app/secret-id
+```
+
+### Generate a Secret ID with constraints
+
+```bash
+vault write auth/approle/role/my-app/secret-id \
+  cidr_list="10.0.0.0/8,172.16.0.0/12" \
+  num_uses=5 \
+  ttl="1h" \
+  metadata='{"environment": "production", "version": "1.2.3"}'
+```
+
+### Use a custom Secret ID
+
+```bash
+vault write auth/approle/role/my-app/custom-secret-id \
+  secret_id="my-custom-secret-id-value"
+```
+
+<Warning>
+  Custom Secret IDs reduce randomness and are generally not recommended. Only use them when you need a predictable value for testing.
+</Warning>
+
+### Secret ID generation parameters
+
+<ParamField path="cidr_list" type="string[]">
+  Comma-separated list of CIDR blocks enforcing Secret IDs to be used from a specific set of IP addresses. Must be a subset of the role's `secret_id_bound_cidrs` if that is set.
+</ParamField>
+
+<ParamField path="metadata" type="string">
+  JSON-formatted string containing metadata key-value pairs to associate with the Secret ID. This metadata is logged with audit events.
+</ParamField>
+
+<ParamField path="num_uses" type="number">
+  Number of times this Secret ID can be used. Overrides `secret_id_num_uses` on the role. May not be higher than the role's `secret_id_num_uses`.
+</ParamField>
+
+<ParamField path="ttl" type="string">
+  Duration after which this Secret ID expires. Overrides `secret_id_ttl` on the role. May not be longer than the role's `secret_id_ttl`.
+</ParamField>
+
+<ParamField path="token_bound_cidrs" type="string[]">
+  CIDR blocks that restrict which IP addresses may use the token returned on login.
+</ParamField>
+
+## Managing Secret IDs
+
+```bash
+# List Secret ID accessors (not the Secret IDs themselves)
+vault list auth/approle/role/my-app/secret-id
+
+# Look up a Secret ID's metadata
+vault write auth/approle/role/my-app/secret-id/lookup \
+  secret_id="841771dc-11c9-bbc7-bcac-6a3945a69cd9"
+
+# Look up by accessor (safer — does not require the Secret ID)
+vault write auth/approle/role/my-app/secret-id-accessor/lookup \
+  secret_id_accessor="84896a0c-1347-aa90-a4f6-aca8b7558780"
+
+# Revoke a Secret ID
+vault write auth/approle/role/my-app/secret-id/destroy \
+  secret_id="841771dc-11c9-bbc7-bcac-6a3945a69cd9"
+```
+
+## Tidy orphaned Secret IDs
+
+Secret IDs that belong to deleted roles can accumulate. Use the tidy endpoint to clean them up:
+
+```bash
+vault write -f auth/approle/tidy/secret-id
+```
+
+## Example: CI/CD pipeline
+
+A common pattern is to store the Role ID in source control (or CI configuration) and generate a fresh Secret ID at the start of each pipeline run:
+
+```bash
+#!/bin/bash
+# Retrieve ROLE_ID from environment / config
+ROLE_ID="${VAULT_ROLE_ID}"
+
+# Generate a fresh Secret ID for this pipeline run
+SECRET_ID=$(vault write -f -field=secret_id auth/approle/role/ci-runner/secret-id)
+
+# Login
+VAULT_TOKEN=$(vault write -field=token auth/approle/login \
+  role_id="$ROLE_ID" \
+  secret_id="$SECRET_ID")
+
+export VAULT_TOKEN
+```
+
+<Tip>
+  Set `secret_id_num_uses=1` on roles used in CI/CD to ensure each Secret ID can only be used once, limiting the blast radius of a leaked Secret ID.
+</Tip>

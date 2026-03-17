@@ -1,0 +1,217 @@
+---
+title: "Integrated Raft Storage"
+description: "Use Vault's built-in Raft storage backend for highly available, production-grade deployments without an external storage dependency."
+---
+
+Vault's integrated storage backend uses the [Raft consensus algorithm](https://raft.github.io/) to provide a highly available, distributed storage layer built directly into Vault. You do not need to run an external storage system such as Consul or etcd.
+
+<Info>
+  Integrated Raft storage is the recommended storage backend for new Vault deployments. It simplifies operations by eliminating the need to manage a separate storage cluster.
+</Info>
+
+## How Raft storage works
+
+Raft is a consensus protocol that ensures data consistency across a cluster of nodes. In a Raft cluster:
+
+- One node is elected **leader** and handles all write operations.
+- **Follower** nodes replicate the leader's log and can serve reads.
+- A **quorum** (majority of nodes) must agree before a write is committed.
+- If the leader fails, a new leader is automatically elected.
+
+For a cluster of `n` nodes, it can tolerate `(n-1)/2` failures. A three-node cluster tolerates one failure; a five-node cluster tolerates two.
+
+## Enabling Raft storage
+
+Configure Raft storage in your Vault configuration file:
+
+```hcl
+storage "raft" {
+  path    = "/vault/data"
+  node_id = "node1"
+}
+
+listener "tcp" {
+  address     = "0.0.0.0:8200"
+  tls_cert_file = "/etc/vault/tls/vault.crt"
+  tls_key_file  = "/etc/vault/tls/vault.key"
+}
+
+cluster_addr = "https://node1.example.com:8201"
+api_addr     = "https://node1.example.com:8200"
+```
+
+**Configuration parameters:**
+
+| Parameter | Description |
+|-----------|-------------|
+| `path` | Directory where Raft data is stored. Must be persistent. |
+| `node_id` | Unique identifier for this node in the cluster. |
+| `retry_join` | Addresses of existing nodes to join on startup. |
+| `performance_multiplier` | Multiplier for Raft timing. Increase for higher latency environments. |
+| `max_entry_size` | Maximum size in bytes of a Raft log entry. |
+
+## Bootstrapping a cluster
+
+### First node
+
+The first node in a new cluster initializes itself automatically when you run `vault operator init`.
+
+<Steps>
+  <Step title="Start the first node">
+    Start Vault with your Raft configuration. The first node will become the initial leader after initialization.
+
+    ```bash
+    vault server -config=/etc/vault/config.hcl
+    ```
+  </Step>
+  <Step title="Initialize Vault">
+    ```bash
+    export VAULT_ADDR=https://node1.example.com:8200
+    vault operator init
+    ```
+
+    Save all unseal keys and the root token.
+  </Step>
+  <Step title="Unseal the first node">
+    ```bash
+    vault operator unseal
+    ```
+  </Step>
+</Steps>
+
+### Joining additional nodes
+
+Subsequent nodes join the existing cluster using `vault operator raft join`.
+
+<Steps>
+  <Step title="Start the new node">
+    Start the Vault process with the same Raft storage configuration but a unique `node_id`.
+  </Step>
+  <Step title="Join the cluster">
+    From the new node, join it to the active cluster:
+
+    ```bash
+    vault operator raft join https://active-node:8200
+    ```
+
+    If TLS certificates are required for cluster communication:
+
+    ```bash
+    vault operator raft join \
+      -leader-ca-cert=@/etc/vault/tls/ca.crt \
+      https://active-node:8200
+    ```
+  </Step>
+  <Step title="Unseal the new node">
+    ```bash
+    vault operator unseal
+    ```
+
+    The new node will begin replicating data from the leader.
+  </Step>
+</Steps>
+
+Alternatively, you can configure `retry_join` blocks in `config.hcl` to automatically join on startup:
+
+```hcl
+storage "raft" {
+  path    = "/vault/data"
+  node_id = "node2"
+
+  retry_join {
+    leader_api_addr = "https://node1.example.com:8200"
+  }
+
+  retry_join {
+    leader_api_addr = "https://node3.example.com:8200"
+  }
+}
+```
+
+## Managing cluster peers
+
+### Listing peers
+
+View all nodes in the Raft cluster and their current status:
+
+```bash
+vault operator raft list-peers
+```
+
+Example output:
+
+```
+Node     Address                       State       Voter
+----     -------                       -----       -----
+node1    node1.example.com:8201        leader      true
+node2    node2.example.com:8201        follower    true
+node3    node3.example.com:8201        follower    true
+```
+
+### Removing a peer
+
+Remove a node that has permanently left the cluster or is unrecoverable:
+
+```bash
+vault operator raft remove-peer <node_id>
+```
+
+<Warning>
+  Only remove peers that are genuinely gone. Removing a live peer that is still running can cause split-brain issues.
+</Warning>
+
+## Autopilot
+
+Autopilot automates common Raft cluster management tasks, reducing operator burden for routine events such as node failures and version upgrades.
+
+### Autopilot features
+
+- **Dead server cleanup**: Automatically removes failed nodes from the cluster after a configurable threshold.
+- **Server stabilization**: Waits for a new node to be stable before promoting it to a voter.
+- **Upgrade migrations**: Coordinates rolling upgrades to ensure the cluster does not lose quorum.
+- **State tracking**: Continuously monitors cluster health and node liveness.
+
+### Checking Autopilot state
+
+```bash
+vault operator raft autopilot state
+```
+
+The output shows:
+- Whether Autopilot is healthy
+- The current leader
+- Voters and non-voters
+- Any servers in a failed state
+
+### Autopilot configuration
+
+View the current Autopilot configuration:
+
+```bash
+vault operator raft autopilot get-config
+```
+
+Update Autopilot settings:
+
+```bash
+vault operator raft autopilot set-config \
+  -cleanup-dead-servers=true \
+  -dead-server-last-contact-threshold=10s \
+  -last-contact-threshold=200ms \
+  -max-trailing-logs=250 \
+  -min-quorum=3 \
+  -server-stabilization-time=10s
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `cleanup-dead-servers` | `false` | Automatically remove dead servers |
+| `dead-server-last-contact-threshold` | `24h` | Time since last contact before a server is considered dead |
+| `last-contact-threshold` | `200ms` | Threshold for detecting leadership problems |
+| `max-trailing-logs` | `250` | Max log entries a server can trail behind the leader |
+| `min-quorum` | `0` | Minimum number of servers required in a cluster |
+| `server-stabilization-time` | `10s` | Time a server must be stable before being promoted |
+
+<Tip>
+  Enable `cleanup-dead-servers` in production to automatically recover quorum after a node failure, without requiring manual `remove-peer` operations.
+</Tip>

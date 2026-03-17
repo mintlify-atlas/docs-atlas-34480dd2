@@ -1,0 +1,173 @@
+---
+title: "Architecture"
+description: "How Vault's core components fit together, from the security barrier to secret engines, auth methods, and high availability."
+---
+
+Vault is structured as a set of layered subsystems. External requests enter through HTTP listeners, are validated by auth methods, routed through the core, and ultimately served by secret engines or the system backend. Every piece of data that flows between the core and the storage backend passes through the security barrier, which encrypts it with AES-256-GCM.
+
+## Component overview
+
+```
+┌──────────────────────────────────────────────────┐
+│                    Clients                       │
+│         (CLI / API / SDK / UI)                   │
+└────────────────────┬─────────────────────────────┘
+                     │ HTTPS
+┌────────────────────▼─────────────────────────────┐
+│               HTTP Listeners                     │
+│          (TCP / Unix socket / mTLS)              │
+└────────────────────┬─────────────────────────────┘
+                     │
+┌────────────────────▼─────────────────────────────┐
+│                  Vault Core                      │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
+│  │  Router  │  │  Token   │  │  Expiration   │  │
+│  │          │  │  Store   │  │  Manager      │  │
+│  └──────────┘  └──────────┘  └───────────────┘  │
+│  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
+│  │  Policy  │  │  Audit   │  │   Identity    │  │
+│  │  Store   │  │  Broker  │  │   Store       │  │
+│  └──────────┘  └──────────┘  └───────────────┘  │
+└────────────────────┬─────────────────────────────┘
+                     │
+┌────────────────────▼─────────────────────────────┐
+│            Security Barrier (AES-256-GCM)        │
+└────────────────────┬─────────────────────────────┘
+                     │
+┌────────────────────▼─────────────────────────────┐
+│            Physical Storage Backend              │
+│   (Raft / Consul / DynamoDB / etcd / etc.)       │
+└──────────────────────────────────────────────────┘
+```
+
+## Core components
+
+<CardGroup cols={2}>
+  <Card title="Security barrier" icon="shield">
+    The `AESGCMBarrier` wraps the physical backend and transparently encrypts every value written to storage using AES-256-GCM with a 96-bit nonce. The barrier is sealed at startup — data can neither be read nor written until it is unsealed with the root key.
+  </Card>
+  <Card title="Physical storage backend" icon="database">
+    The untrusted, durable layer that stores ciphertext blobs. Vault ships drivers for HashiCorp Raft (integrated storage), Consul, AWS DynamoDB, etcd, Google Cloud Storage, and more. The backend has no knowledge of plaintext values.
+  </Card>
+  <Card title="Router" icon="route">
+    The `Router` maintains a radix-tree mount table. Incoming API paths are matched against mount prefixes and dispatched to the correct logical backend — whether a secret engine, auth method, or the system backend.
+  </Card>
+  <Card title="Secret engines" icon="key">
+    Pluggable backends mounted at arbitrary paths (e.g. `secret/`, `pki/`, `database/`). They generate or store secrets and optionally issue time-bounded leases tracked by the Expiration Manager.
+  </Card>
+  <Card title="Auth methods" icon="user-check">
+    Pluggable backends mounted under `auth/`. They authenticate callers and return a `logical.Auth` object containing policies and a TTL. The Token Store then mints a service or batch token for the caller.
+  </Card>
+  <Card title="Policy store" icon="file-text">
+    Stores ACL policies (HCL or JSON) in the barrier under `sys/policy/`. The `PolicyStore` uses an LRU cache of up to 1,024 entries (`policyCacheSize = 1024`) to accelerate lookups. Policies control which capabilities a token has on each path.
+  </Card>
+  <Card title="Token store" icon="ticket">
+    Manages the lifecycle of service and batch tokens. Tokens are indexed by ID under `id/`, by accessor under `accessor/`, and by parent under `parent/` — enabling hierarchical revocation. Token length is 24 bytes (`TokenLength = 24`) plus a 4-byte prefix (`TokenPrefixLength = 4`).
+  </Card>
+  <Card title="Expiration manager" icon="clock">
+    Tracks every lease in the system. Uses a `sync.Map` of timers for pending leases and a pool of up to 200 worker goroutines (`numExpirationWorkersDefault = 200`) to run revocations concurrently. Default and maximum lease TTL are both 32 days (`maxLeaseTTL = 32 * 24 * time.Hour`).
+  </Card>
+  <Card title="Audit broker" icon="clipboard-list">
+    Fans out every request and response to all registered audit devices (file, syslog, socket). A request is rejected if any enabled audit device fails to log it.
+  </Card>
+  <Card title="Identity store" icon="users">
+    Deduplicates client identities across auth methods using entities and groups. Policies attached to an entity or group are automatically applied to any token that maps to that entity.
+  </Card>
+</CardGroup>
+
+## Request flow
+
+<Steps>
+  <Step title="Client sends request">
+    A client sends an HTTPS request to a Vault listener. The request includes an `X-Vault-Token` header (or cookie) identifying the caller.
+  </Step>
+  <Step title="Token validation">
+    The core looks up the token in the Token Store. If the token is valid, its policies are resolved by the Policy Store. Batch tokens are validated inline without a storage lookup.
+  </Step>
+  <Step title="Audit pre-log">
+    The Audit Broker writes the sanitized request to every enabled audit device before any backend processes it.
+  </Step>
+  <Step title="ACL check">
+    The resolved policies are compiled into an ACL. If the token lacks the required capability for the requested path, the request is rejected with a `403`.
+  </Step>
+  <Step title="Routing">
+    The Router matches the request path against the mount table and forwards it to the appropriate backend (secret engine, auth method, or system backend).
+  </Step>
+  <Step title="Backend processing">
+    The backend generates or retrieves the secret. If the response includes a `logical.Secret` with a non-zero TTL, the Expiration Manager registers a new lease.
+  </Step>
+  <Step title="Audit post-log">
+    The Audit Broker writes the sanitized response (secrets are hashed or redacted) to all audit devices.
+  </Step>
+  <Step title="Response returned">
+    The JSON response, including any lease metadata, is returned to the client.
+  </Step>
+</Steps>
+
+## Security barrier and encryption
+
+The barrier is implemented as `AESGCMBarrier` in `vault/barrier_aes_gcm.go`. Key properties:
+
+| Property | Value |
+|---|---|
+| Cipher | AES-256-GCM |
+| Nonce size | 12 bytes (Go default) |
+| Key size | 256 bits |
+| Versioning | `AESGCMVersion1 = 0x1`, `AESGCMVersion2 = 0x2` |
+| Auto-rotation check | Every 5 minutes (`autoRotateCheckInterval`) |
+| Key term prefix | 4 bytes (`termSize = 4`) prepended to every ciphertext |
+
+The barrier maintains a keyring of encryption keys indexed by term number. Each ciphertext is prefixed with its term so that older keys can still decrypt data written before a rotation. Vault also uses `mlock` to prevent the root key from being swapped to disk:
+
+```go
+// From vault/core.go
+ErrMlockFailedTemplate = "Failed to lock memory: %v\n\n" +
+    "This usually means that the mlock syscall is not available.\n" +
+    "Vault uses mlock to prevent memory from being swapped to\n" +
+    "disk. ..."
+```
+
+## High availability
+
+Vault uses a single-active-node model. The `Core` struct tracks HA state with:
+
+```go
+// From vault/core.go
+standby     bool
+perfStandby bool
+```
+
+| Node type | Description |
+|---|---|
+| Active | Holds the distributed lock at `core/lock`. Processes all write requests. |
+| Standby | Forwards write requests to the active node. Can serve read-only requests if performance standby is enabled. |
+| Performance standby | Enterprise feature. Serves read requests locally using replicated state. |
+
+Leader information is advertised at `core/leader/<uuid>` and includes the redirect and cluster addresses:
+
+```go
+// From vault/core.go
+type activeAdvertisement struct {
+    RedirectAddr     string                     `json:"redirect_addr"`
+    ClusterAddr      string                     `json:"cluster_addr,omitempty"`
+    ClusterCert      []byte                     `json:"cluster_cert,omitempty"`
+    ClusterKeyParams *certutil.ClusterKeyParams `json:"cluster_key_params,omitempty"`
+}
+```
+
+Standby nodes detect an active node failure by failing to acquire `core/lock`. A "poison pill" entry at `core/poison-pill` can also instruct standby nodes to immediately seal themselves.
+
+## Plugin architecture
+
+<CardGroup cols={2}>
+  <Card title="Built-in plugins" icon="box">
+    Compiled directly into the Vault binary. Registered via `builtinRegistry` on the `Core` struct. Includes KV, PKI, database, AWS, and most other standard engines and auth methods.
+  </Card>
+  <Card title="External plugins" icon="plug">
+    Separate binaries loaded from a `plugin_directory`. Vault communicates with them over a gRPC connection using mTLS. The plugin catalog is persisted at `core/plugin-catalog/` and `core/plugin-runtime-catalog/`.
+  </Card>
+</CardGroup>
+
+<Note>
+  External plugins are verified using a SHA-256 checksum registered at enable time. Vault will refuse to launch a plugin whose binary does not match the registered hash.
+</Note>

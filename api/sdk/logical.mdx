@@ -1,0 +1,241 @@
+---
+title: "Go SDK: Logical Client"
+description: "Perform generic read, write, delete, and list operations on any Vault path using the Logical client."
+---
+
+The `Logical` client provides low-level read, write, delete, and list operations against any path in Vault. Obtain it via `client.Logical()`.
+
+```go
+logical := client.Logical()
+```
+
+## Read
+
+### `Read(path string) (*Secret, error)`
+
+Reads the secret at the given path. Equivalent to a `GET /v1/<path>` request.
+
+```go
+secret, err := client.Logical().Read("secret/data/my-app")
+if err != nil {
+    log.Fatal(err)
+}
+if secret == nil {
+    fmt.Println("Secret not found")
+} else {
+    fmt.Println(secret.Data)
+}
+```
+
+### `ReadWithContext(ctx context.Context, path string) (*Secret, error)`
+
+Same as `Read` but accepts a context for cancellation and deadline control.
+
+```go
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+
+secret, err := client.Logical().ReadWithContext(ctx, "secret/data/my-app")
+```
+
+### `ReadWithData(path string, data map[string][]string) (*Secret, error)`
+
+Reads with additional query parameters.
+
+```go
+// Read a specific KV v2 version
+secret, err := client.Logical().ReadWithData(
+    "secret/data/my-app",
+    map[string][]string{"version": {"3"}},
+)
+```
+
+---
+
+## Write
+
+### `Write(path string, data map[string]interface{}) (*Secret, error)`
+
+Writes data to the given path. Equivalent to a `PUT /v1/<path>` request.
+
+```go
+secret, err := client.Logical().Write("secret/data/my-app", map[string]interface{}{
+    "data": map[string]interface{}{
+        "username": "admin",
+        "password": "s3cr3t",
+    },
+})
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### `WriteWithContext(ctx context.Context, path string, data map[string]interface{}) (*Secret, error)`
+
+Context-aware version of `Write`.
+
+```go
+secret, err := client.Logical().WriteWithContext(ctx, "auth/approle/login", map[string]interface{}{
+    "role_id":   "my-role-id",
+    "secret_id": "my-secret-id",
+})
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println("Token:", secret.Auth.ClientToken)
+```
+
+---
+
+## Delete
+
+### `Delete(path string) (*Secret, error)`
+
+Deletes the secret at the given path. Equivalent to `DELETE /v1/<path>`.
+
+```go
+_, err := client.Logical().Delete("secret/data/my-app")
+if err != nil {
+    log.Fatal(err)
+}
+```
+
+### `DeleteWithContext(ctx context.Context, path string) (*Secret, error)`
+
+Context-aware version of `Delete`.
+
+```go
+_, err := client.Logical().DeleteWithContext(ctx, "secret/data/my-app")
+```
+
+---
+
+## List
+
+### `List(path string) (*Secret, error)`
+
+Lists keys at the given path. Equivalent to `GET /v1/<path>?list=true`.
+
+```go
+secret, err := client.Logical().List("secret/metadata/my-app")
+if err != nil {
+    log.Fatal(err)
+}
+if secret != nil {
+    keys := secret.Data["keys"].([]interface{})
+    for _, key := range keys {
+        fmt.Println(key)
+    }
+}
+```
+
+### `ListWithContext(ctx context.Context, path string) (*Secret, error)`
+
+Context-aware version of `List`.
+
+```go
+secret, err := client.Logical().ListWithContext(ctx, "secret/metadata")
+```
+
+---
+
+## The `*Secret` Return Type
+
+All operations return `*Secret`, the primary response structure from the Vault API.
+
+```go
+type Secret struct {
+    RequestID     string                 // Unique request ID
+    LeaseID       string                 // Lease ID (for dynamic secrets)
+    LeaseDuration int                    // Lease TTL in seconds
+    Renewable     bool                   // Whether the lease is renewable
+    Data          map[string]interface{} // Secret payload
+    Warnings      []string               // Non-fatal warnings
+    Auth          *SecretAuth            // Populated on login responses
+    WrapInfo      *SecretWrapInfo        // Populated for wrapped responses
+    MountType     string                 // Type of mount that returned this secret
+}
+```
+
+<ResponseField name="RequestID" type="string">
+  The unique identifier for the request that generated this response.
+</ResponseField>
+
+<ResponseField name="LeaseID" type="string">
+  The lease ID for dynamic secrets. Pass this to `/sys/leases/renew` or `/sys/leases/revoke`.
+</ResponseField>
+
+<ResponseField name="LeaseDuration" type="integer">
+  Lease duration in seconds.
+</ResponseField>
+
+<ResponseField name="Renewable" type="boolean">
+  Whether the lease can be renewed.
+</ResponseField>
+
+<ResponseField name="Data" type="object">
+  The secret data. Shape depends on the secrets engine.
+</ResponseField>
+
+<ResponseField name="Warnings" type="array">
+  Warnings from the server (non-fatal).
+</ResponseField>
+
+<ResponseField name="Auth" type="object">
+  Non-nil only for login responses.
+  <Expandable title="SecretAuth fields">
+    <ResponseField name="ClientToken" type="string">The resulting client token.</ResponseField>
+    <ResponseField name="Accessor" type="string">Token accessor.</ResponseField>
+    <ResponseField name="Policies" type="array">Combined list of token and identity policies.</ResponseField>
+    <ResponseField name="TokenPolicies" type="array">Policies attached directly to the token.</ResponseField>
+    <ResponseField name="IdentityPolicies" type="array">Policies from the entity.</ResponseField>
+    <ResponseField name="Metadata" type="object">Key/value metadata associated with the auth.</ResponseField>
+    <ResponseField name="LeaseDuration" type="integer">Token TTL in seconds.</ResponseField>
+    <ResponseField name="Renewable" type="boolean">Whether this token can be renewed.</ResponseField>
+    <ResponseField name="Orphan" type="boolean">Whether this is an orphan token.</ResponseField>
+    <ResponseField name="EntityID" type="string">The identity entity ID.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Error Handling
+
+When Vault returns an error response, the SDK returns a `*ResponseError`:
+
+```go
+import vault "github.com/hashicorp/vault/api"
+
+secret, err := client.Logical().Read("secret/data/restricted")
+if err != nil {
+    var respErr *vault.ResponseError
+    if errors.As(err, &respErr) {
+        fmt.Printf("HTTP %d: %v\n", respErr.StatusCode, respErr.Errors)
+        // respErr.StatusCode: 403 for permission denied, 404 for not found, etc.
+    } else {
+        // Network error or other non-HTTP error
+        fmt.Println("Error:", err)
+    }
+}
+
+// A nil secret with nil error means the path exists but is empty
+if secret == nil && err == nil {
+    fmt.Println("Path not found or empty")
+}
+```
+
+---
+
+## Unwrapping Responses
+
+For wrapped secrets (cubbyhole-based response wrapping):
+
+```go
+// When a wrapped token is returned, use Unwrap to retrieve the actual secret
+wrappingToken := "s.abc123"
+actualSecret, err := client.Logical().Unwrap(wrappingToken)
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(actualSecret.Data)
+```

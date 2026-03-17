@@ -1,0 +1,307 @@
+---
+title: "ACL Policies"
+description: "Write and manage ACL policies to control which operations tokens can perform on which Vault paths."
+---
+
+Access Control List (ACL) policies define what operations a token is permitted to perform. Every request to Vault is evaluated against the policies attached to the token making the request.
+
+## Policy syntax
+
+Policies are written in HashiCorp Configuration Language (HCL) or JSON. A policy consists of one or more `path` blocks, each specifying a path and a set of capabilities.
+
+```hcl
+# Allow reading secrets under secret/data/myapp/
+path "secret/data/myapp/*" {
+  capabilities = ["read", "list"]
+}
+
+# Allow all operations on a specific secret
+path "secret/data/myapp/config" {
+  capabilities = ["create", "read", "update", "delete"]
+}
+
+# Explicitly deny access to sensitive keys
+path "secret/data/myapp/admin" {
+  capabilities = ["deny"]
+}
+```
+
+## Capabilities
+
+Capabilities map to HTTP methods and correspond to the operations allowed on a path. These are defined in the Vault source as constants in `vault/policy.go`:
+
+| Capability | HTTP Method | Description |
+|------------|-------------|-------------|
+| `create` | PUT | Create a new value at the path |
+| `read` | GET | Read an existing value |
+| `update` | POST | Update an existing value |
+| `patch` | PATCH | Partially update a value |
+| `delete` | DELETE | Delete a value |
+| `list` | LIST | List keys at the path |
+| `sudo` | — | Allow access to root-protected paths |
+| `deny` | — | Explicitly deny access; overrides all other capabilities |
+
+<Info>
+  `deny` always takes precedence. If any policy grants `deny` on a path, access is denied regardless of other policies granting access.
+</Info>
+
+### sudo capability
+
+Certain Vault paths are root-protected and require the `sudo` capability in addition to the relevant CRUD capability:
+
+```hcl
+# Allow sealing Vault (root-protected path)
+path "sys/seal" {
+  capabilities = ["update", "sudo"]
+}
+
+# Allow managing auth method tuning
+path "sys/auth/+/tune" {
+  capabilities = ["update", "sudo"]
+}
+```
+
+## Path wildcards
+
+Vault supports two wildcard types for path matching:
+
+### Glob (`*`)
+
+Matches any number of characters including `/`. Only valid at the end of a path:
+
+```hcl
+# Matches secret/data/myapp/, secret/data/myapp/foo, secret/data/myapp/foo/bar
+path "secret/data/myapp/*" {
+  capabilities = ["read"]
+}
+```
+
+### Single-segment wildcard (`+`)
+
+Matches exactly one path segment (no `/`). Can appear anywhere in a path:
+
+```hcl
+# Matches secret/data/team-a/config, secret/data/team-b/config
+# Does NOT match secret/data/team-a/nested/config
+path "secret/data/+/config" {
+  capabilities = ["read", "update"]
+}
+
+# Match all team secrets with a fixed structure
+path "secret/data/+/+" {
+  capabilities = ["read"]
+}
+```
+
+<Warning>
+  The combination `+*` is invalid and will be rejected by Vault's policy parser.
+</Warning>
+
+## Parameter constraints
+
+Constraints on request and response data parameters provide fine-grained control beyond path and capability.
+
+### allowed_parameters
+
+Limit which parameter names (and optionally values) are permitted in a request:
+
+```hcl
+path "secret/data/shared/db-creds" {
+  capabilities = ["create", "update"]
+
+  # Only allow setting 'username' and 'password'
+  allowed_parameters = {
+    "username" = []
+    "password" = []
+  }
+}
+
+# Restrict to specific values
+path "auth/token/create" {
+  capabilities = ["update"]
+
+  allowed_parameters = {
+    # Only allow creating tokens with these specific policies
+    "policies" = ["read-only", "developer"]
+  }
+}
+```
+
+### denied_parameters
+
+Explicitly block specific parameters while allowing all others:
+
+```hcl
+path "auth/token/create" {
+  capabilities = ["update"]
+
+  # Prevent setting an explicit token ID (would allow creating predictable tokens)
+  denied_parameters = {
+    "id" = []
+  }
+}
+```
+
+### required_parameters
+
+Require specific parameters to be present in the request:
+
+```hcl
+path "secret/data/audit/*" {
+  capabilities = ["create", "update"]
+
+  required_parameters = ["reason"]
+}
+```
+
+## Wrapping TTL constraints
+
+Control whether responses must be wrapped and within what TTL range:
+
+```hcl
+path "secret/data/sensitive" {
+  capabilities = ["read"]
+
+  min_wrapping_ttl = "1s"
+  max_wrapping_ttl = "90s"
+}
+```
+
+## Managing policies
+
+### Writing a policy
+
+```bash
+# From a file
+vault policy write my-policy policy.hcl
+
+# Inline with a here-document
+vault policy write my-policy - <<EOF
+path "secret/data/myapp/*" {
+  capabilities = ["read", "list"]
+}
+EOF
+```
+
+### Reading a policy
+
+```bash
+vault policy read my-policy
+```
+
+### Listing policies
+
+```bash
+vault policy list
+```
+
+### Deleting a policy
+
+```bash
+vault policy delete my-policy
+```
+
+## Assigning policies to tokens
+
+Policies are attached to tokens at creation time. There are several ways to assign them:
+
+```bash
+# Create a token with specific policies
+vault token create -policy=my-policy -policy=another-policy
+
+# Assign policies to an AppRole
+vault write auth/approle/role/my-app \
+  token_policies="my-policy,another-policy"
+
+# Assign policies to a Kubernetes auth role
+vault write auth/kubernetes/role/my-app \
+  bound_service_account_names="my-sa" \
+  bound_service_account_namespaces="default" \
+  policies="my-policy"
+```
+
+## Built-in policies
+
+Vault includes two built-in policies that cannot be deleted:
+
+### root
+
+The `root` policy grants unrestricted access to all paths. It is automatically attached to tokens created with the root token. Avoid using root tokens for day-to-day operations.
+
+### default
+
+The `default` policy is automatically attached to all non-root tokens unless explicitly excluded with `-no-default-policy`. It provides minimal capabilities like token self-management:
+
+```hcl
+# Excerpt from the default policy
+path "auth/token/lookup-self" {
+  capabilities = ["read"]
+}
+
+path "auth/token/renew-self" {
+  capabilities = ["update"]
+}
+
+path "auth/token/revoke-self" {
+  capabilities = ["update"]
+}
+
+path "sys/capabilities-self" {
+  capabilities = ["update"]
+}
+```
+
+## Policy examples
+
+### Application read-only policy
+
+```hcl
+# Allow reading application secrets
+path "secret/data/myapp/*" {
+  capabilities = ["read", "list"]
+}
+
+# Allow reading PKI certificates
+path "pki/issue/myapp" {
+  capabilities = ["update"]
+}
+
+# Allow accessing the database credential endpoint
+path "database/creds/myapp-role" {
+  capabilities = ["read"]
+}
+```
+
+### Database admin policy
+
+```hcl
+# Full control over the database secrets engine
+path "database/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+# Allow managing database connection configs
+path "database/config/*" {
+  capabilities = ["create", "read", "update", "delete", "list", "sudo"]
+}
+```
+
+### Templated policy
+
+Use identity entity information to write self-service policies:
+
+```hcl
+# Each user can only access their own secret path
+path "secret/data/users/{{identity.entity.name}}/*" {
+  capabilities = ["create", "read", "update", "delete", "list"]
+}
+
+# Allow access to team paths based on group membership
+path "secret/data/teams/{{identity.groups.names}}/*" {
+  capabilities = ["read", "list"]
+}
+```
+
+<Tip>
+  Use `vault token capabilities <path>` to check what capabilities a token has on a given path without making an actual request to that path.
+</Tip>
